@@ -1,91 +1,108 @@
-import mongoose, { Schema } from "mongoose";
-import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
+import mongoose, { Schema } from 'mongoose';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 
 const userSchema = new Schema(
-    {
-        full_name: {
-            type: String,
-            required: true,
-            trim: true,
-            index: true
-        },
-        email: {
-            type: String,
-            required: true,
-            unique: true,
-            lowercase: true,
-            trim: true,
-            index: true
-        },
-        phone_number: {
-            type: String,
-            unique: true,
-            sparse: true,
-            trim: true
-        },
-        password_hash: {
-            type: String,
-            required: [true, 'Password is required'],
-            select: false
-        },
-        profile_picture: {
-            type: String, // Cloudinary url
-        },
-        status: {
-            type: String,
-            enum: ['active', 'suspended', 'unverified'],
-            default: 'unverified'
-        },
-        role: {
-            type: String,
-            enum: ['STUDENT', 'ADMIN', 'INSTRUCTOR'],
-            default: 'STUDENT'
-        },
-        refresh_token: {
-            type: String
-        }
+  {
+    full_name: {
+      type: String,
+      required: true,
+      trim: true,
+      index: true,
     },
-    {
-        timestamps: true
-    }
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    phone_number: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
+    password_hash: {
+      type: String,
+      required: [true, 'Password is required'],
+      select: false,
+    },
+    profile_picture: {
+      type: String, // Cloudinary url
+    },
+    status: {
+      type: String,
+      enum: ['active', 'suspended', 'unverified'],
+      default: 'unverified',
+    },
+    role: {
+      type: String,
+      enum: ['STUDENT', 'ADMIN', 'INSTRUCTOR'],
+      default: 'STUDENT',
+    },
+    refresh_token: {
+      type: String,
+    },
+    loginAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lockUntil: {
+      type: Date,
+    },
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpire: {
+      type: Date,
+    },
+  },
+  {
+    timestamps: true,
+  },
 );
 
-userSchema.pre("save", async function (next) {
-    if(!this.isModified("password_hash")) return next();
-    this.password_hash = await bcrypt.hash(this.password_hash, 10);
-    next();
+userSchema.virtual('isLocked').get(function () {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
-userSchema.methods.isPasswordCorrect = async function(password){
-    return await bcrypt.compare(password, this.password_hash);
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password_hash')) return next();
+  this.password_hash = await bcrypt.hash(this.password_hash, 10);
+  next();
+});
+
+userSchema.methods.isPasswordCorrect = async function (password) {
+  return await bcrypt.compare(password, this.password_hash);
 };
 
-userSchema.methods.generateAccessToken = function(){
-    return jwt.sign(
-        {
-            _id: this._id,
-            email: this.email,
-            full_name: this.full_name,
-            role: this.role
-        },
-        process.env.ACCESS_TOKEN_SECRET,
-        {
-            expiresIn: process.env.ACCESS_TOKEN_EXPIRY
-        }
-    );
+userSchema.methods.generateAccessToken = function () {
+  return jwt.sign(
+    {
+      _id: this._id,
+      email: this.email,
+      full_name: this.full_name,
+      role: this.role,
+    },
+    process.env.ACCESS_TOKEN_SECRET,
+    {
+      expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+    },
+  );
 };
 
-userSchema.methods.generateRefreshToken = function(){
-    return jwt.sign(
-        {
-            _id: this._id,
-        },
-        process.env.REFRESH_TOKEN_SECRET,
-        {
-            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
-        }
-    );
+userSchema.methods.generateRefreshToken = function () {
+  return jwt.sign(
+    {
+      _id: this._id,
+    },
+    process.env.REFRESH_TOKEN_SECRET,
+    {
+      expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
+    },
+  );
 };
 
-export const User = mongoose.model("User", userSchema);
+export const User = mongoose.model('User', userSchema);
