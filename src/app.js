@@ -39,10 +39,12 @@ app.use(mongoSanitize());
 // --- ROUTES IMPORTS ---
 import healthcheckRouter from './routes/healthcheck.routes.js';
 import authRouter from './routes/auth.routes.js';
+import userRouter from './routes/user.routes.js';
 
 // --- ROUTES DECLARATION ---
 app.use('/api/v1/healthcheck', healthcheckRouter);
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/users', userRouter);
 
 // --- GLOBAL ERROR HANDLER ---
 app.use(errorHandler);
