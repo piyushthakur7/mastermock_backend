@@ -14,7 +14,7 @@ const resourceSchema = new Schema(
     file_url: { type: String, required: true },
     resource_type: {
       type: String,
-      enum: ['pdf', 'video', 'notes', 'assignment'],
+      enum: ['pdf', 'video', 'notes', 'assignment', 'solution'],
       required: true,
     },
     created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
