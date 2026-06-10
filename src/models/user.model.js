@@ -68,10 +68,9 @@ userSchema.virtual('isLocked').get(function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password_hash')) return next();
+userSchema.pre('save', async function () {
+  if (!this.isModified('password_hash')) return;
   this.password_hash = await bcrypt.hash(this.password_hash, 10);
-  next();
 });
 
 userSchema.methods.isPasswordCorrect = async function (password) {

@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { globalLimiter } from './middlewares/rateLimiter.middleware.js';
 import { errorHandler } from './middlewares/error.middleware.js';
+import { ApiError } from './utils/ApiError.js';
 
 const app = express();
 
@@ -76,6 +77,11 @@ app.use('/api/v1/notifications', notificationRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
 app.use('/api/v1/inquiries', inquiryRouter);
+
+// --- 404 HANDLER FOR API ROUTES ---
+app.all('/api/v1/*', (req, res, next) => {
+  next(new ApiError(404, `Can't find ${req.originalUrl} on this server!`));
+});
 
 // --- GLOBAL ERROR HANDLER ---
 app.use(errorHandler);
