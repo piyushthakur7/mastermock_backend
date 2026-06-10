@@ -40,11 +40,13 @@ app.use(mongoSanitize());
 import healthcheckRouter from './routes/healthcheck.routes.js';
 import authRouter from './routes/auth.routes.js';
 import userRouter from './routes/user.routes.js';
+import categoryRouter from './routes/category.routes.js';
 
 // --- ROUTES DECLARATION ---
 app.use('/api/v1/healthcheck', healthcheckRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', userRouter);
+app.use('/api/v1/categories', categoryRouter);
 
 // --- GLOBAL ERROR HANDLER ---
 app.use(errorHandler);
