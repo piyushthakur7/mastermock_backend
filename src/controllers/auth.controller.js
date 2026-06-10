@@ -189,6 +189,7 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
   }
 
   user.password_hash = newPassword;
+  user.refresh_token = undefined;
   await user.save({ validateBeforeSave: false });
 
   return res
@@ -227,7 +228,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
     .json(
       new ApiResponse(
         200,
-        { resetToken },
+        {},
         'Password reset token generated and sent to email',
       ),
     );
@@ -253,6 +254,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
   user.password_hash = password;
   user.resetPasswordToken = undefined;
   user.resetPasswordExpire = undefined;
+  user.refresh_token = undefined;
   await user.save({ validateBeforeSave: false });
 
   return res

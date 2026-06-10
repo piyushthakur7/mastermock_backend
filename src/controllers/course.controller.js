@@ -155,6 +155,10 @@ export const enrollCourse = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Course not found or inactive');
   }
 
+  if (course.access_type === 'paid') {
+    throw new ApiError(400, 'Paid courses require purchase to enroll');
+  }
+
   const existingEnrollment = await Enrollment.findOne({
     user: req.user._id,
     course: course._id,

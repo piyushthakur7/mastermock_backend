@@ -1,5 +1,6 @@
 import { Resource } from '../models/resource.model.js';
 import { Course } from '../models/course.model.js';
+import { Enrollment } from '../models/enrollment.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -75,8 +76,25 @@ export const deleteResource = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/resources/course/:courseId
 // @access  Private/Student
 export const getCourseResources = asyncHandler(async (req, res) => {
+  const courseId = req.params.courseId;
+  const course = await Course.findById(courseId);
+  if (!course) {
+    throw new ApiError(404, 'Course not found');
+  }
+
+  if (req.user.role !== 'ADMIN') {
+    const enrollment = await Enrollment.findOne({
+      user: req.user._id,
+      course: courseId,
+      status: 'ACTIVE',
+    });
+    if (!enrollment) {
+      throw new ApiError(403, 'Active enrollment required to access resources');
+    }
+  }
+
   const resources = await Resource.find({
-    course: req.params.courseId,
+    course: courseId,
     isDeleted: false,
     is_active: true,
   }).sort({ createdAt: -1 });
@@ -98,6 +116,20 @@ export const downloadResource = asyncHandler(async (req, res) => {
 
   if (!resource) {
     throw new ApiError(404, 'Resource not found');
+  }
+
+  if (req.user.role !== 'ADMIN') {
+    const enrollment = await Enrollment.findOne({
+      user: req.user._id,
+      course: resource.course,
+      status: 'ACTIVE',
+    });
+    if (!enrollment) {
+      throw new ApiError(
+        403,
+        'Active enrollment required to download resources',
+      );
+    }
   }
 
   // Generate signed URL from S3
