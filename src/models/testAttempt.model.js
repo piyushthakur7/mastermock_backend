@@ -8,6 +8,7 @@ const answerSnapshotSchema = new Schema(
     selected_option_id: { type: Schema.Types.ObjectId },
     selected_option_text: { type: String },
     is_correct: { type: Boolean, default: false },
+    is_marked_for_review: { type: Boolean, default: false },
     answered_at: { type: Date },
   },
   { _id: false },
