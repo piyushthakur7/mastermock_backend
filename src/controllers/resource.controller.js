@@ -5,10 +5,10 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
-  uploadFileToS3,
-  deleteFileFromS3,
+  uploadFileToCloudinary,
+  deleteFileFromCloudinary,
   generateSignedDownloadUrl,
-} from '../utils/s3.js';
+} from '../utils/cloudinary.js';
 import crypto from 'crypto';
 
 // @desc    Upload a new resource
@@ -30,11 +30,10 @@ export const uploadResource = asyncHandler(async (req, res) => {
   const uniqueSuffix = crypto.randomBytes(8).toString('hex');
   const fileName = `resources/${course}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
 
-  // Upload to S3
-  const s3Key = await uploadFileToS3(
+  // Upload to Cloudinary
+  const publicId = await uploadFileToCloudinary(
     req.file.buffer,
-    fileName,
-    req.file.mimetype,
+    fileName
   );
 
   const resource = await Resource.create({
@@ -42,7 +41,7 @@ export const uploadResource = asyncHandler(async (req, res) => {
     description,
     course,
     resource_type,
-    file_url: s3Key, // Storing the S3 Key here for signed URLs later
+    file_url: publicId, // Storing the Cloudinary publicId here for signed URLs later
     created_by: req.user._id,
   });
 
@@ -61,8 +60,8 @@ export const deleteResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  // Delete from S3
-  await deleteFileFromS3(resource.file_url);
+  // Delete from Cloudinary
+  await deleteFileFromCloudinary(resource.file_url);
 
   // Hard delete from DB as it's just a file reference
   await resource.deleteOne();
@@ -132,7 +131,7 @@ export const downloadResource = asyncHandler(async (req, res) => {
     }
   }
 
-  // Generate signed URL from S3
+  // Generate signed URL from Cloudinary
   const signedUrl = await generateSignedDownloadUrl(resource.file_url);
 
   return res

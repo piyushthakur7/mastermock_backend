@@ -14,6 +14,16 @@ const paymentSchema = new Schema(
     razorpay_order_id: { type: String, required: true, unique: true },
     razorpay_payment_id: { type: String },
     razorpay_signature: { type: String },
+    item_id: {
+      type: Schema.Types.ObjectId,
+      required: true,
+      refPath: 'item_type',
+    },
+    item_type: {
+      type: String,
+      required: true,
+      enum: ['Course', 'MockTest'],
+    },
     status: {
       type: String,
       enum: ['PENDING', 'SUCCESS', 'FAILED', 'REFUNDED'],

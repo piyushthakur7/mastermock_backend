@@ -20,3 +20,5 @@ connectdb()
     console.error('MongoDB connection failed !!! ', err);
     logger.error('MongoDB connection failed !!! ', err);
   });
+
+export default app;
