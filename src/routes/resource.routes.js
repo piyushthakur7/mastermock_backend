@@ -4,6 +4,7 @@ import {
   deleteResource,
   getCourseResources,
   downloadResource,
+  serveResource,
 } from '../controllers/resource.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/role.middleware.js';
@@ -13,7 +14,10 @@ import { createResourceSchema } from '../validators/resource.validator.js';
 
 const router = Router();
 
-// Apply verifyJWT to all routes
+// Publicly accessible route (uses JWT in query params instead of Bearer token)
+router.route('/serve').get(serveResource);
+
+// Apply verifyJWT to all other routes
 router.use(verifyJWT);
 
 // Shared / Student routes

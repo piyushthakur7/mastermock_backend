@@ -5,10 +5,14 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
-  uploadFileToCloudinary,
-  deleteFileFromCloudinary,
+  uploadFileLocally,
+  deleteFileLocally,
   generateSignedDownloadUrl,
-} from '../utils/cloudinary.js';
+} from '../utils/fileStorage.js';
+import path from 'path';
+import jwt from 'jsonwebtoken';
+import { env } from '../config/env.js';
+import fs from 'fs';
 import crypto from 'crypto';
 
 // @desc    Upload a new resource
@@ -30,11 +34,8 @@ export const uploadResource = asyncHandler(async (req, res) => {
   const uniqueSuffix = crypto.randomBytes(8).toString('hex');
   const fileName = `resources/${course}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
 
-  // Upload to Cloudinary
-  const publicId = await uploadFileToCloudinary(
-    req.file.buffer,
-    fileName
-  );
+  // Upload locally
+  const publicId = await uploadFileLocally(req.file.buffer, fileName);
 
   const resource = await Resource.create({
     title,
@@ -60,8 +61,8 @@ export const deleteResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  // Delete from Cloudinary
-  await deleteFileFromCloudinary(resource.file_url);
+  // Delete from local storage
+  await deleteFileLocally(resource.file_url);
 
   // Hard delete from DB as it's just a file reference
   await resource.deleteOne();
@@ -131,8 +132,8 @@ export const downloadResource = asyncHandler(async (req, res) => {
     }
   }
 
-  // Generate signed URL from Cloudinary
-  const signedUrl = await generateSignedDownloadUrl(resource.file_url);
+  // Generate signed URL for local download
+  const signedUrl = await generateSignedDownloadUrl(resource.file_url, req);
 
   return res
     .status(200)
@@ -143,4 +144,37 @@ export const downloadResource = asyncHandler(async (req, res) => {
         'Signed URL generated successfully',
       ),
     );
+});
+
+// @desc    Serve a resource file directly via token
+// @route   GET /api/v1/resources/serve?token=...
+// @access  Public (Token verified)
+export const serveResource = asyncHandler(async (req, res) => {
+  const { token } = req.query;
+
+  if (!token) {
+    throw new ApiError(400, 'Download token is required');
+  }
+
+  try {
+    const decodedToken = jwt.verify(token, env.ACCESS_TOKEN_SECRET);
+    const fileName = decodedToken.file;
+
+    if (!fileName) {
+      throw new ApiError(400, 'Invalid download token');
+    }
+
+    const fullPath = path.join(process.cwd(), 'uploads', fileName);
+
+    if (!fs.existsSync(fullPath)) {
+      throw new ApiError(404, 'File not found on server');
+    }
+
+    res.download(fullPath);
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      throw new ApiError(401, 'Download link has expired');
+    }
+    throw new ApiError(401, 'Invalid download token');
+  }
 });
