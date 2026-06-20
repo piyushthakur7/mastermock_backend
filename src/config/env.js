@@ -5,7 +5,7 @@ dotenv.config({ path: './.env' });
 
 const envSchema = z.object({
   PORT: z.string().default('3000'),
-  MONGO_URI: z.string().url('Must be a valid URL'),
+  MONGO_URI: z.string().min(1, 'Mongo URI is required'),
   CORS_ORIGIN: z.string().default('*'),
   ACCESS_TOKEN_SECRET: z
     .string()
