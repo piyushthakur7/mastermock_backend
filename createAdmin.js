@@ -4,10 +4,10 @@ import { User } from './src/models/user.model.js';
 const createAdmin = async () => {
   try {
     await connectdb();
-    
+
     const adminEmail = 'admin@example.com';
-    const password = 'AdminPassword123!';
-    
+    const password = 'Y8!vQ2#Lm7@Nx4$P!';
+
     let admin = await User.findOne({ email: adminEmail });
     if (admin) {
       console.log('Admin user already exists!');
@@ -22,13 +22,13 @@ const createAdmin = async () => {
       password_hash: password,
       phone_number: '0000000000',
       role: 'ADMIN',
-      status: 'active'
+      status: 'active',
     });
 
     console.log('Test admin user created successfully!');
     console.log(`Email: ${adminEmail}`);
     console.log(`Password: ${password}`);
-    
+
     process.exit(0);
   } catch (error) {
     console.error('Error creating admin user:', error);
