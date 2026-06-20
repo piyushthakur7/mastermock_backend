@@ -8,6 +8,14 @@ export const setupExamWorker = () => {
     return;
   }
 
+  // Prevent starting persistent worker in Serverless environments like Vercel
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION) {
+    console.warn(
+      'Running in a serverless environment (Vercel/Lambda). Exam Worker disabled to prevent 503 timeouts.',
+    );
+    return;
+  }
+
   const worker = new Worker(
     'exam-autosubmit',
     async (job) => {
