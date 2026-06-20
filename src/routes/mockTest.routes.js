@@ -11,6 +11,8 @@ import {
   bulkUploadQuestions,
   getMockTests,
   getMockTestById,
+  getMyPurchasedTests,
+  checkAccess,
 } from '../controllers/mockTest.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/role.middleware.js';
@@ -26,9 +28,13 @@ const router = Router();
 
 router.use(verifyJWT);
 
+// Student routes (specific paths BEFORE parameterized /:id)
 router.route('/').get(getMockTests);
+router.route('/my/purchased').get(getMyPurchasedTests);
 router.route('/:id').get(getMockTestById);
+router.route('/:id/check-access').get(checkAccess);
 
+// Admin routes
 router.use(authorizeRoles('ADMIN'));
 
 router.route('/').post(validate(createMockTestSchema), createMockTest);

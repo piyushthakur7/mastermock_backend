@@ -25,6 +25,13 @@ const mockTestSchema = new Schema(
       enum: ['easy', 'medium', 'hard'],
       default: 'medium',
     },
+    access_type: {
+      type: String,
+      enum: ['free', 'paid'],
+      default: 'free',
+      index: true,
+    },
+    price: { type: Number, default: 0 },
     total_questions: { type: Number, required: true },
     passing_marks: { type: Number, required: true },
     negative_marking: { type: Boolean, default: false },

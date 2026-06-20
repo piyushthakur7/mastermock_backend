@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   uploadResource,
   deleteResource,
+  getAllResources,
   getCourseResources,
   downloadResource,
   serveResource,
@@ -20,7 +21,8 @@ router.route('/serve').get(serveResource);
 // Apply verifyJWT to all other routes
 router.use(verifyJWT);
 
-// Shared / Student routes
+// Student routes — all PDFs are free for logged-in users
+router.route('/').get(getAllResources);
 router.route('/course/:courseId').get(getCourseResources);
 router.route('/:id/download').get(downloadResource);
 

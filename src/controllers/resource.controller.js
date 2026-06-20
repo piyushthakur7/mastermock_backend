@@ -1,6 +1,5 @@
 import { Resource } from '../models/resource.model.js';
 import { Course } from '../models/course.model.js';
-import { Enrollment } from '../models/enrollment.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -19,11 +18,14 @@ import crypto from 'crypto';
 // @route   POST /api/v1/resources
 // @access  Private/Admin
 export const uploadResource = asyncHandler(async (req, res) => {
-  const { title, description, course, resource_type } = req.body;
+  const { title, description, course, category, resource_type } = req.body;
 
-  const courseExists = await Course.findById(course);
-  if (!courseExists) {
-    throw new ApiError(404, 'Course not found');
+  // Validate course reference if provided
+  if (course) {
+    const courseExists = await Course.findById(course);
+    if (!courseExists) {
+      throw new ApiError(404, 'Course not found');
+    }
   }
 
   if (!req.file) {
@@ -32,7 +34,8 @@ export const uploadResource = asyncHandler(async (req, res) => {
 
   // Generate unique filename
   const uniqueSuffix = crypto.randomBytes(8).toString('hex');
-  const fileName = `resources/${course}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
+  const folder = course || 'standalone';
+  const fileName = `resources/${folder}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
 
   // Upload locally
   const publicId = await uploadFileLocally(req.file.buffer, fileName);
@@ -40,7 +43,8 @@ export const uploadResource = asyncHandler(async (req, res) => {
   const resource = await Resource.create({
     title,
     description,
-    course,
+    course: course || undefined,
+    category: category || undefined,
     resource_type,
     file_url: publicId, // Storing the Cloudinary publicId here for signed URLs later
     created_by: req.user._id,
@@ -72,7 +76,27 @@ export const deleteResource = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, {}, 'Resource deleted successfully'));
 });
 
-// @desc    Get resources for a course
+// @desc    Get all resources (standalone PDFs) — login required, no enrollment check
+// @route   GET /api/v1/resources
+// @access  Private/Student
+export const getAllResources = asyncHandler(async (req, res) => {
+  const filter = { isDeleted: false, is_active: true };
+
+  // Optional filtering by category or resource_type
+  if (req.query.category) filter.category = req.query.category;
+  if (req.query.resource_type) filter.resource_type = req.query.resource_type;
+
+  const resources = await Resource.find(filter)
+    .populate('category', 'name')
+    .populate('course', 'title')
+    .sort({ createdAt: -1 });
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, resources, 'Resources fetched successfully'));
+});
+
+// @desc    Get resources for a course (backward compatible)
 // @route   GET /api/v1/resources/course/:courseId
 // @access  Private/Student
 export const getCourseResources = asyncHandler(async (req, res) => {
@@ -80,17 +104,6 @@ export const getCourseResources = asyncHandler(async (req, res) => {
   const course = await Course.findById(courseId);
   if (!course) {
     throw new ApiError(404, 'Course not found');
-  }
-
-  if (req.user.role !== 'ADMIN') {
-    const enrollment = await Enrollment.findOne({
-      user: req.user._id,
-      course: courseId,
-      status: 'ACTIVE',
-    });
-    if (!enrollment) {
-      throw new ApiError(403, 'Active enrollment required to access resources');
-    }
   }
 
   const resources = await Resource.find({
@@ -106,7 +119,7 @@ export const getCourseResources = asyncHandler(async (req, res) => {
 
 // @desc    Get signed download URL for a resource
 // @route   GET /api/v1/resources/:id/download
-// @access  Private/Student
+// @access  Private/Student (all PDFs are free for logged-in users)
 export const downloadResource = asyncHandler(async (req, res) => {
   const resource = await Resource.findOne({
     _id: req.params.id,
@@ -118,19 +131,7 @@ export const downloadResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  if (req.user.role !== 'ADMIN') {
-    const enrollment = await Enrollment.findOne({
-      user: req.user._id,
-      course: resource.course,
-      status: 'ACTIVE',
-    });
-    if (!enrollment) {
-      throw new ApiError(
-        403,
-        'Active enrollment required to download resources',
-      );
-    }
-  }
+  // All PDFs are free for logged-in users — no enrollment check needed
 
   // Generate signed URL for local download
   const signedUrl = await generateSignedDownloadUrl(resource.file_url, req);

@@ -1,5 +1,6 @@
 import { TestAttempt } from '../models/testAttempt.model.js';
 import { MockTest } from '../models/mockTest.model.js';
+import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -18,6 +19,19 @@ export const startTest = asyncHandler(async (req, res) => {
     is_active: true,
   });
   if (!mockTest) throw new ApiError(404, 'Mock test not found or inactive');
+
+  // Check if paid test requires purchase
+  if (mockTest.access_type === 'paid') {
+    const purchase = await Purchase.findOne({
+      user: userId,
+      item_id: mock_test_id,
+      item_type: 'MockTest',
+      status: 'ACTIVE',
+    });
+    if (!purchase) {
+      throw new ApiError(403, 'This is a paid test. Please purchase it first.');
+    }
+  }
 
   // Check attempt limits
   const existingAttempts = await TestAttempt.countDocuments({

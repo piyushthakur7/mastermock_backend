@@ -36,10 +36,18 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
 
 export const getAdminDashboard = asyncHandler(async (req, res) => {
   const totalStudents = await User.countDocuments({ role: 'STUDENT' });
-  const totalCourses = await Course.countDocuments();
-  const totalTests = await MockTest.countDocuments();
+  const totalCourses = await Course.countDocuments({ isDeleted: false });
+  const totalTests = await MockTest.countDocuments({ isDeleted: false });
+  const totalFreeTests = await MockTest.countDocuments({
+    isDeleted: false,
+    access_type: 'free',
+  });
+  const totalPaidTests = await MockTest.countDocuments({
+    isDeleted: false,
+    access_type: 'paid',
+  });
 
-  const payments = await Payment.find({ payment_status: 'SUCCESS' });
+  const payments = await Payment.find({ status: 'SUCCESS' });
   const revenue = payments.reduce((acc, curr) => acc + curr.amount, 0);
 
   res.json(
@@ -49,6 +57,8 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
         totalStudents,
         totalCourses,
         totalTests,
+        totalFreeTests,
+        totalPaidTests,
         revenue,
       },
       'Admin dashboard fetched',

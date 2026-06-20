@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { Payment } from '../models/payment.model.js';
 import { Purchase } from '../models/purchase.model.js';
 import { Course } from '../models/course.model.js';
+import { MockTest } from '../models/mockTest.model.js';
 import { Enrollment } from '../models/enrollment.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
@@ -20,13 +21,62 @@ const razorpay = new Razorpay({
 });
 
 // @desc    Create Razorpay order
+// @route   POST /api/v1/payments/create-order
+// @access  Private/Student
 router.post(
   '/create-order',
   asyncHandler(async (req, res) => {
-    const { item_id, item_type, amount } = req.body;
+    const { item_id, item_type } = req.body;
+
+    if (!item_id || !item_type) {
+      throw new ApiError(400, 'item_id and item_type are required');
+    }
+
+    if (!['Course', 'MockTest'].includes(item_type)) {
+      throw new ApiError(400, 'item_type must be Course or MockTest');
+    }
+
+    // Determine the price from the item
+    let amount = 0;
+    if (item_type === 'Course') {
+      const course = await Course.findOne({
+        _id: item_id,
+        isDeleted: false,
+        is_active: true,
+      });
+      if (!course) throw new ApiError(404, 'Course not found');
+      if (course.access_type !== 'paid')
+        throw new ApiError(400, 'This course is free, no payment required');
+      amount = course.price;
+    } else if (item_type === 'MockTest') {
+      const mockTest = await MockTest.findOne({
+        _id: item_id,
+        isDeleted: false,
+        is_active: true,
+      });
+      if (!mockTest) throw new ApiError(404, 'Mock Test not found');
+      if (mockTest.access_type !== 'paid')
+        throw new ApiError(400, 'This test is free, no payment required');
+      amount = mockTest.price;
+    }
+
+    if (amount <= 0) {
+      throw new ApiError(400, 'Invalid item price');
+    }
+
+    // Check if already purchased
+    const existingPurchase = await Purchase.findOne({
+      user: req.user._id,
+      item_id,
+      item_type,
+      status: 'ACTIVE',
+    });
+    if (existingPurchase) {
+      throw new ApiError(400, 'You have already purchased this item');
+    }
 
     const options = {
-      amount: amount * 100, // amount in smallest currency unit
+      amount: amount * 100, // amount in smallest currency unit (paise)
       currency: 'INR',
       receipt: `receipt_order_${Date.now()}`,
     };
@@ -38,26 +88,46 @@ router.post(
     // Save pending payment record
     await Payment.create({
       user: req.user._id,
-      order_id: order.id,
+      razorpay_order_id: order.id,
       amount: amount,
       currency: 'INR',
-      payment_status: 'PENDING',
       item_id,
       item_type,
+      status: 'PENDING',
     });
 
-    res.json(new ApiResponse(200, order, 'Order created'));
+    res.json(
+      new ApiResponse(
+        200,
+        {
+          order_id: order.id,
+          amount: amount,
+          currency: 'INR',
+          key_id: env.RAZORPAY_KEY_ID,
+        },
+        'Order created',
+      ),
+    );
   }),
 );
 
 // @desc    Verify payment
+// @route   POST /api/v1/payments/verify
+// @access  Private/Student
 router.post(
   '/verify',
   asyncHandler(async (req, res) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
       req.body;
 
-    const payment = await Payment.findOne({ order_id: razorpay_order_id });
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      throw new ApiError(
+        400,
+        'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required',
+      );
+    }
+
+    const payment = await Payment.findOne({ razorpay_order_id });
     if (!payment) throw new ApiError(404, 'Order not found');
 
     const hmac = crypto.createHmac(
@@ -68,15 +138,16 @@ router.post(
     const generated_signature = hmac.digest('hex');
 
     if (generated_signature === razorpay_signature) {
-      payment.payment_status = 'SUCCESS';
-      payment.payment_id = razorpay_payment_id;
+      payment.status = 'SUCCESS';
+      payment.razorpay_payment_id = razorpay_payment_id;
+      payment.razorpay_signature = razorpay_signature;
       await payment.save();
 
       // Create Purchase Record
       await Purchase.create({
         user: req.user._id,
-        item: payment.item_id,
-        itemModel: payment.item_type,
+        item_id: payment.item_id,
+        item_type: payment.item_type,
         payment: payment._id,
         amount: payment.amount,
         status: 'ACTIVE',
@@ -84,18 +155,61 @@ router.post(
 
       // If it's a course, auto-enroll
       if (payment.item_type === 'Course') {
-        await Enrollment.create({
-          student: req.user._id,
+        const existingEnrollment = await Enrollment.findOne({
+          user: req.user._id,
           course: payment.item_id,
         });
+        if (!existingEnrollment) {
+          await Enrollment.create({
+            user: req.user._id,
+            course: payment.item_id,
+          });
+        }
       }
 
       res.json(new ApiResponse(200, payment, 'Payment verified successfully'));
     } else {
-      payment.payment_status = 'FAILED';
+      payment.status = 'FAILED';
       await payment.save();
       throw new ApiError(400, 'Payment verification failed');
     }
+  }),
+);
+
+// @desc    Get my purchases
+// @route   GET /api/v1/payments/my-purchases
+// @access  Private/Student
+router.get(
+  '/my-purchases',
+  asyncHandler(async (req, res) => {
+    const purchases = await Purchase.find({
+      user: req.user._id,
+      status: 'ACTIVE',
+    })
+      .populate('item_id')
+      .sort({ createdAt: -1 });
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, purchases, 'Purchases fetched successfully'));
+  }),
+);
+
+// @desc    Get my payment history
+// @route   GET /api/v1/payments/my-history
+// @access  Private/Student
+router.get(
+  '/my-history',
+  asyncHandler(async (req, res) => {
+    const payments = await Payment.find({
+      user: req.user._id,
+    }).sort({ createdAt: -1 });
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(200, payments, 'Payment history fetched successfully'),
+      );
   }),
 );
 

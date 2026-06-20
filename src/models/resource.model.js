@@ -8,7 +8,11 @@ const resourceSchema = new Schema(
     course: {
       type: Schema.Types.ObjectId,
       ref: 'Course',
-      required: true,
+      index: true,
+    },
+    category: {
+      type: Schema.Types.ObjectId,
+      ref: 'Category',
       index: true,
     },
     file_url: { type: String, required: true },

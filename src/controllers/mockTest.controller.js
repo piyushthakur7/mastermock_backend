@@ -1,4 +1,5 @@
 import { MockTest } from '../models/mockTest.model.js';
+import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -175,4 +176,78 @@ export const getMockTestById = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, mockTest, 'Mock test fetched successfully'));
+});
+
+// --- STUDENT: PURCHASED TESTS ---
+
+export const getMyPurchasedTests = asyncHandler(async (req, res) => {
+  const purchases = await Purchase.find({
+    user: req.user._id,
+    item_type: 'MockTest',
+    status: 'ACTIVE',
+  });
+
+  const testIds = purchases.map((p) => p.item_id);
+
+  const mockTests = await MockTest.find({
+    _id: { $in: testIds },
+    isDeleted: false,
+    is_active: true,
+  })
+    .select('-questions.options.is_correct')
+    .sort({ createdAt: -1 });
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        mockTests,
+        'Purchased mock tests fetched successfully',
+      ),
+    );
+});
+
+// --- STUDENT: CHECK ACCESS ---
+
+export const checkAccess = asyncHandler(async (req, res) => {
+  const mockTest = await MockTest.findOne({
+    _id: req.params.id,
+    isDeleted: false,
+    is_active: true,
+  });
+
+  if (!mockTest) throw new ApiError(404, 'Mock Test not found');
+
+  let hasAccess = false;
+  let reason = '';
+
+  if (mockTest.access_type === 'free') {
+    hasAccess = true;
+    reason = 'Free test — no purchase required';
+  } else {
+    const purchase = await Purchase.findOne({
+      user: req.user._id,
+      item_id: mockTest._id,
+      item_type: 'MockTest',
+      status: 'ACTIVE',
+    });
+    hasAccess = !!purchase;
+    reason = hasAccess
+      ? 'Paid test — purchase verified'
+      : 'Paid test — purchase required';
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        has_access: hasAccess,
+        access_type: mockTest.access_type,
+        price: mockTest.price,
+        reason,
+      },
+      'Access check completed',
+    ),
+  );
 });
