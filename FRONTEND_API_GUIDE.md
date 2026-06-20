@@ -32,6 +32,32 @@
 | **PDFs/Resources** | Decoupled from courses. All PDFs are **free** for logged-in users. New `GET /resources` endpoint. |
 | **Leaderboard** | Pagination support, best-score-per-user ranking, new `my-rank` endpoint. |
 | **Dashboard** | Admin dashboard now includes `totalFreeTests` and `totalPaidTests`. |
+| **Authentication** | Added dedicated `/admin-login` endpoint to strictly enforce `ADMIN` roles for the admin panel. |
+
+### 1.1 Admin Authentication API
+
+```
+POST /api/v1/auth/admin-login
+```
+
+**Description:** Use this endpoint specifically for your frontend Admin Login page (`/admin/login`). It works exactly like the regular student login but will throw a `403 Access Denied` error if the user is not an `ADMIN`.
+
+**Request Body:**
+```json
+{
+  "email": "admin@example.com",
+  "password": "your_password"
+}
+```
+
+**Success Response (200):** Same as normal login (returns user object, sets cookies, returns tokens).
+
+**Error Responses:**
+| Status | When |
+|--------|------|
+| `401` | Invalid email or password |
+| `403` | User is a student, not an ADMIN |
+| `403` | Account is temporarily locked due to 5 failed attempts (15 min lock) |
 
 ### ⚠️ Breaking Changes
 

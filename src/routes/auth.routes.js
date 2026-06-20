@@ -7,6 +7,7 @@ import {
   changeCurrentPassword,
   forgotPassword,
   resetPassword,
+  adminLogin,
 } from '../controllers/auth.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
@@ -24,6 +25,7 @@ const router = Router();
 // Public Routes
 router.post('/register', validate(registerSchema), registerUser);
 router.post('/login', authLimiter, validate(loginSchema), loginUser);
+router.post('/admin-login', authLimiter, validate(loginSchema), adminLogin);
 router.post('/refresh-token', refreshAccessToken);
 router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword);
 router.post(

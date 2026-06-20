@@ -35,3 +35,7 @@ coverage/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+createAdmin.js
+unlock.js
+FRONTEND_API_GUIDE.md

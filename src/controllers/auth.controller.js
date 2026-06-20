@@ -110,6 +110,67 @@ export const loginUser = asyncHandler(async (req, res) => {
     );
 });
 
+// @desc    Login an Admin
+// @route   POST /api/v1/auth/admin-login
+export const adminLogin = asyncHandler(async (req, res) => {
+  const { email, password } = req.body;
+
+  const user = await User.findOne({ email }).select('+password_hash');
+
+  if (!user) {
+    throw new ApiError(401, 'Invalid credentials');
+  }
+
+  // Enforce Admin Role
+  if (user.role !== 'ADMIN') {
+    throw new ApiError(403, 'Access denied. Only admins can use this login.');
+  }
+
+  // Check account lock
+  if (user.isLocked) {
+    throw new ApiError(
+      403,
+      'Account is temporarily locked due to too many failed attempts. Try again in 15 minutes.',
+    );
+  }
+
+  const isPasswordValid = await user.isPasswordCorrect(password);
+
+  if (!isPasswordValid) {
+    user.loginAttempts += 1;
+    if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+      user.lockUntil = Date.now() + LOCK_TIME_MS;
+      logger.warn(`Admin Account Locked: ${user.email}`);
+    }
+    await user.save({ validateBeforeSave: false });
+    throw new ApiError(401, 'Invalid credentials');
+  }
+
+  // Reset lock on successful login
+  user.loginAttempts = 0;
+  user.lockUntil = undefined;
+  await user.save({ validateBeforeSave: false });
+
+  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+    user._id,
+  );
+  const loggedInUser = await User.findById(user._id).select(
+    '-password_hash -refresh_token',
+  );
+
+  return res
+    .status(200)
+    .cookie('accessToken', accessToken, cookieOptions)
+    .cookie('refreshToken', refreshToken, cookieOptions)
+    .json(
+      new ApiResponse(
+        200,
+        { user: loggedInUser, accessToken, refreshToken },
+        'Admin logged in successfully',
+      ),
+    );
+});
+
 // @desc    Logout user
 // @route   POST /api/v1/auth/logout
 export const logoutUser = asyncHandler(async (req, res) => {
