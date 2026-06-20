@@ -1,8 +1,7 @@
-import { Worker } from 'bullmq';
 import { redis } from '../utils/redis.js';
 import { TestAttempt } from '../models/testAttempt.model.js';
 
-export const setupExamWorker = () => {
+export const setupExamWorker = async () => {
   if (!redis) {
     console.warn('Redis not configured. Exam Worker not started.');
     return;
@@ -16,29 +15,35 @@ export const setupExamWorker = () => {
     return;
   }
 
-  const worker = new Worker(
-    'exam-autosubmit',
-    async (job) => {
-      const { attemptId } = job.data;
+  try {
+    const { Worker } = await import('bullmq');
 
-      const attempt = await TestAttempt.findById(attemptId);
+    const worker = new Worker(
+      'exam-autosubmit',
+      async (job) => {
+        const { attemptId } = job.data;
 
-      if (attempt && attempt.status === 'IN_PROGRESS') {
-        attempt.status = 'COMPLETED';
-        attempt.completed_at = new Date();
+        const attempt = await TestAttempt.findById(attemptId);
 
-        // Evaluation is deferred to the results phase or another job
+        if (attempt && attempt.status === 'IN_PROGRESS') {
+          attempt.status = 'COMPLETED';
+          attempt.completed_at = new Date();
 
-        await attempt.save();
-        console.log(`Auto-submitted attempt ${attemptId}`);
-      }
-    },
-    { connection: redis },
-  );
+          // Evaluation is deferred to the results phase or another job
 
-  worker.on('failed', (job, err) => {
-    console.error(`Job ${job.id} failed with error ${err.message}`);
-  });
+          await attempt.save();
+          console.log(`Auto-submitted attempt ${attemptId}`);
+        }
+      },
+      { connection: redis },
+    );
 
-  console.log('Exam Auto-Submit Worker started');
+    worker.on('failed', (job, err) => {
+      console.error(`Job ${job.id} failed with error ${err.message}`);
+    });
+
+    console.log('Exam Auto-Submit Worker started');
+  } catch (err) {
+    console.error('Failed to start Exam Worker:', err.message);
+  }
 };

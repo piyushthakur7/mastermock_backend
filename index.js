@@ -11,10 +11,13 @@ console.log('Connecting to MongoDB...');
 connectdb()
   .then(() => {
     console.log('MongoDB connected successfully!');
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server successfully bound and running on port ${PORT}`);
-      logger.info(`Server running at http://localhost:${PORT}/`);
-    });
+    // Prevent starting custom HTTP server if deployed on Vercel (Vercel handles it)
+    if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_VERSION) {
+      app.listen(PORT, () => {
+        console.log(`Server successfully bound and running on port ${PORT}`);
+        logger.info(`Server running at http://localhost:${PORT}/`);
+      });
+    }
   })
   .catch((err) => {
     console.error('MongoDB connection failed !!! ', err);

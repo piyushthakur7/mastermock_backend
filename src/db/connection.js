@@ -4,6 +4,10 @@ import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
 const connectdb = async () => {
+  if (mongoose.connection.readyState >= 1) {
+    logger.info('MongoDB already connected');
+    return;
+  }
   try {
     const connectionInstance = await mongoose.connect(
       `${env.MONGO_URI}/${DB_NAME}`,

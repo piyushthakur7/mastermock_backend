@@ -1,5 +1,4 @@
 import swaggerJsdoc from 'swagger-jsdoc';
-import swaggerUi from 'swagger-ui-express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -16,11 +15,11 @@ const options = {
     servers: [
       {
         url: 'https://backend.mastermocks.in/api/v1',
-        description: 'Production Server'
+        description: 'Production Server',
       },
       {
         url: 'http://localhost:5000/api/v1',
-        description: 'Local Server'
+        description: 'Local Server',
       },
     ],
   },
@@ -29,6 +28,18 @@ const options = {
 
 const specs = swaggerJsdoc(options);
 
-export const setupSwagger = (app) => {
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+export const setupSwagger = async (app) => {
+  if (process.env.VERCEL) {
+    console.warn(
+      'Swagger UI disabled on Vercel to prevent crashes due to missing static assets.',
+    );
+    return;
+  }
+
+  try {
+    const swaggerUi = (await import('swagger-ui-express')).default;
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+  } catch (error) {
+    console.warn('Failed to setup Swagger:', error.message);
+  }
 };
