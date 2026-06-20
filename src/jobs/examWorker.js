@@ -42,6 +42,10 @@ export const setupExamWorker = async () => {
       console.error(`Job ${job.id} failed with error ${err.message}`);
     });
 
+    worker.on('error', (err) => {
+      console.error(`Worker encountered an error: ${err.message}`);
+    });
+
     console.log('Exam Auto-Submit Worker started');
   } catch (err) {
     console.error('Failed to start Exam Worker:', err.message);
