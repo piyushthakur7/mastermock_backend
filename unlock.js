@@ -1,16 +1,18 @@
-import connectdb from './src/db/index.js';
+import { connectDB } from './src/db/index.js';
 import { User } from './src/models/user.model.js';
 
-connectdb()
-  .then(async () => {
-    await User.updateMany(
+async function unlockAdmin() {
+  try {
+    await connectDB();
+    const user = await User.findOneAndUpdate(
       { email: 'admin@example.com' },
-      { $set: { loginAttempts: 0, lockUntil: null } }
+      { $set: { loginAttempts: 0 }, $unset: { lockUntil: 1 } },
+      { new: true }
     );
-    console.log('Admin account unlocked successfully!');
-    process.exit(0);
-  })
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+    console.log('Unlocked user:', user ? user.email : 'Not found');
+  } catch (error) {
+    console.error('Error unlocking user:', error);
+  } process.exit(0);
+}
+
+unlockAdmin();

@@ -76,7 +76,13 @@ export const loginUser = asyncHandler(async (req, res) => {
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    user.loginAttempts += 1;
+    if (user.lockUntil && user.lockUntil <= Date.now()) {
+      user.loginAttempts = 1;
+      user.lockUntil = undefined;
+    } else {
+      user.loginAttempts += 1;
+    }
+
     if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
       user.lockUntil = Date.now() + LOCK_TIME_MS;
       logger.warn(`User Account Locked: ${user.email}`);
@@ -137,7 +143,13 @@ export const adminLogin = asyncHandler(async (req, res) => {
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    user.loginAttempts += 1;
+    if (user.lockUntil && user.lockUntil <= Date.now()) {
+      user.loginAttempts = 1;
+      user.lockUntil = undefined;
+    } else {
+      user.loginAttempts += 1;
+    }
+
     if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
       user.lockUntil = Date.now() + LOCK_TIME_MS;
       logger.warn(`Admin Account Locked: ${user.email}`);
