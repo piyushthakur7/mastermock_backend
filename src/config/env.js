@@ -26,6 +26,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().optional().default('redis://localhost:6379'),
   RAZORPAY_KEY_ID: z.string().optional().default(''),
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
 });
 
 const _env = envSchema.safeParse(process.env);

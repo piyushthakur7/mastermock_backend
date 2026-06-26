@@ -30,7 +30,14 @@ app.use('/api', globalLimiter);
 
 // 5. Body Parsers & Cookie Parser
 // --- MIDDLEWARES ---
-app.use(express.json({ limit: '16kb' }));
+app.use(
+  express.json({
+    limit: '16kb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 app.use(express.static('public'));
 app.use(cookieParser());
