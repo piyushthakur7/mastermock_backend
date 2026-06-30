@@ -324,15 +324,24 @@ router.post(
       payment.razorpay_signature = razorpay_signature;
       await payment.save();
 
-      // Create Purchase Record
-      await Purchase.create({
+      // Create Purchase Record if not exists
+      const existingPurchase = await Purchase.findOne({
         user: req.user._id,
         item_id: payment.item_id,
         item_type: payment.item_type,
-        payment: payment._id,
-        amount: payment.amount,
         status: 'ACTIVE',
       });
+
+      if (!existingPurchase) {
+        await Purchase.create({
+          user: req.user._id,
+          item_id: payment.item_id,
+          item_type: payment.item_type,
+          payment: payment._id,
+          amount: payment.amount,
+          status: 'ACTIVE',
+        });
+      }
 
       // If it's a course, auto-enroll
       if (payment.item_type === 'Course') {
@@ -341,10 +350,17 @@ router.post(
           course: payment.item_id,
         });
         if (!existingEnrollment) {
-          await Enrollment.create({
-            user: req.user._id,
-            course: payment.item_id,
-          });
+          try {
+            await Enrollment.create({
+              user: req.user._id,
+              course: payment.item_id,
+            });
+          } catch (error) {
+            // Ignore duplicate key error (11000) which can happen if webhook auto-enrolled concurrently
+            if (error.code !== 11000) {
+              console.error('Error creating enrollment:', error);
+            }
+          }
         }
       }
 
