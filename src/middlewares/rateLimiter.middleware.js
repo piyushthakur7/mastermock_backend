@@ -3,7 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 
 export const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5000, // limit each IP to 5000 requests per windowMs
+  max: 1000000, // Extremely high limit to effectively disable it
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_, __, ___, options) => {
