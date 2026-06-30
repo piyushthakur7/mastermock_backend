@@ -161,10 +161,18 @@ router.post(
 
 router.use(verifyJWT);
 
-const razorpay = new Razorpay({
-  key_id: env.RAZORPAY_KEY_ID || 'dummy_key',
-  key_secret: env.RAZORPAY_KEY_SECRET || 'dummy_secret',
-});
+const getRazorpayInstance = () => {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError(
+      500,
+      'Razorpay API keys are not configured in the backend',
+    );
+  }
+  return new Razorpay({
+    key_id: env.RAZORPAY_KEY_ID,
+    key_secret: env.RAZORPAY_KEY_SECRET,
+  });
+};
 
 // @desc    Create Razorpay order
 // @route   POST /api/v1/payments/create-order
@@ -221,13 +229,24 @@ router.post(
       throw new ApiError(400, 'You have already purchased this item');
     }
 
+    const razorpay = getRazorpayInstance();
+
     const options = {
-      amount: amount * 100, // amount in smallest currency unit (paise)
+      amount: Math.round(amount * 100), // amount in smallest currency unit (paise), rounded to avoid precision issues
       currency: 'INR',
       receipt: `receipt_order_${Date.now()}`,
     };
 
-    const order = await razorpay.orders.create(options);
+    let order;
+    try {
+      order = await razorpay.orders.create(options);
+    } catch (error) {
+      throw new ApiError(
+        500,
+        'Razorpay error: ' + (error.message || 'Failed to create order'),
+      );
+    }
+
     if (!order)
       throw new ApiError(500, 'Some error occurred while creating order');
 
@@ -276,12 +295,28 @@ router.post(
     const payment = await Payment.findOne({ razorpay_order_id });
     if (!payment) throw new ApiError(404, 'Order not found');
 
-    const hmac = crypto.createHmac(
-      'sha256',
-      env.RAZORPAY_KEY_SECRET || 'dummy_secret',
-    );
+    if (!env.RAZORPAY_KEY_SECRET) {
+      throw new ApiError(
+        500,
+        'Razorpay API keys are not configured in the backend',
+      );
+    }
+
+    const hmac = crypto.createHmac('sha256', env.RAZORPAY_KEY_SECRET);
     hmac.update(razorpay_order_id + '|' + razorpay_payment_id);
     const generated_signature = hmac.digest('hex');
+
+    if (generated_signature !== razorpay_signature) {
+      payment.status = 'FAILED';
+      await payment.save();
+      throw new ApiError(400, 'Payment verification failed');
+    }
+
+    if (payment.status === 'SUCCESS') {
+      return res.json(
+        new ApiResponse(200, payment, 'Payment already verified successfully'),
+      );
+    }
 
     if (generated_signature === razorpay_signature) {
       payment.status = 'SUCCESS';
