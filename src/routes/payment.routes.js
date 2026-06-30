@@ -319,41 +319,67 @@ router.post(
     }
 
     if (generated_signature === razorpay_signature) {
-      payment.status = 'SUCCESS';
-      payment.razorpay_payment_id = razorpay_payment_id;
-      payment.razorpay_signature = razorpay_signature;
-      await payment.save();
+      // Use findOneAndUpdate to prevent VersionError race condition with webhook
+      const updatedPayment = await Payment.findOneAndUpdate(
+        { _id: payment._id, status: 'PENDING' },
+        {
+          $set: {
+            status: 'SUCCESS',
+            razorpay_payment_id: razorpay_payment_id,
+            razorpay_signature: razorpay_signature,
+          },
+        },
+        { new: true },
+      );
+
+      // If updatedPayment is null, it means it was already processed (e.g. by webhook)
+      if (!updatedPayment) {
+        const currentPayment = await Payment.findById(payment._id);
+        if (currentPayment && currentPayment.status === 'SUCCESS') {
+          return res.json(
+            new ApiResponse(
+              200,
+              currentPayment,
+              'Payment already verified successfully',
+            ),
+          );
+        }
+        throw new ApiError(
+          400,
+          'Payment could not be verified (invalid status)',
+        );
+      }
 
       // Create Purchase Record if not exists
       const existingPurchase = await Purchase.findOne({
         user: req.user._id,
-        item_id: payment.item_id,
-        item_type: payment.item_type,
+        item_id: updatedPayment.item_id,
+        item_type: updatedPayment.item_type,
         status: 'ACTIVE',
       });
 
       if (!existingPurchase) {
         await Purchase.create({
           user: req.user._id,
-          item_id: payment.item_id,
-          item_type: payment.item_type,
-          payment: payment._id,
-          amount: payment.amount,
+          item_id: updatedPayment.item_id,
+          item_type: updatedPayment.item_type,
+          payment: updatedPayment._id,
+          amount: updatedPayment.amount,
           status: 'ACTIVE',
         });
       }
 
       // If it's a course, auto-enroll
-      if (payment.item_type === 'Course') {
+      if (updatedPayment.item_type === 'Course') {
         const existingEnrollment = await Enrollment.findOne({
           user: req.user._id,
-          course: payment.item_id,
+          course: updatedPayment.item_id,
         });
         if (!existingEnrollment) {
           try {
             await Enrollment.create({
               user: req.user._id,
-              course: payment.item_id,
+              course: updatedPayment.item_id,
             });
           } catch (error) {
             // Ignore duplicate key error (11000) which can happen if webhook auto-enrolled concurrently
@@ -364,10 +390,14 @@ router.post(
         }
       }
 
-      res.json(new ApiResponse(200, payment, 'Payment verified successfully'));
+      return res.json(
+        new ApiResponse(200, updatedPayment, 'Payment verified successfully'),
+      );
     } else {
-      payment.status = 'FAILED';
-      await payment.save();
+      await Payment.findOneAndUpdate(
+        { _id: payment._id, status: 'PENDING' },
+        { $set: { status: 'FAILED' } },
+      );
       throw new ApiError(400, 'Payment verification failed');
     }
   }),
