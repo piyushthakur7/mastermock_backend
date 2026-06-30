@@ -5,7 +5,6 @@ import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
 import morgan from 'morgan';
 import { env } from './config/env.js';
-import { globalLimiter } from './middlewares/rateLimiter.middleware.js';
 import { errorHandler } from './middlewares/error.middleware.js';
 import { ApiError } from './utils/ApiError.js';
 
@@ -29,7 +28,6 @@ app.use(
 app.use(morgan('dev'));
 
 // 4. Rate Limiting
-app.use('/api', globalLimiter);
 
 // 5. Body Parsers & Cookie Parser
 // --- MIDDLEWARES ---

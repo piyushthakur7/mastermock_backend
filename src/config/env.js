@@ -37,3 +37,28 @@ if (!_env.success) {
 }
 
 export const env = _env.data;
+
+// Startup warnings for critical payment config
+if (!_env.data.RAZORPAY_KEY_ID || !_env.data.RAZORPAY_KEY_SECRET) {
+  console.warn(
+    '⚠️  RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET is not set. Payment features will not work.',
+  );
+} else {
+  const idIsTest = _env.data.RAZORPAY_KEY_ID.startsWith('rzp_test_');
+  const idIsLive = _env.data.RAZORPAY_KEY_ID.startsWith('rzp_live_');
+  if (!idIsTest && !idIsLive) {
+    console.warn(
+      '⚠️  RAZORPAY_KEY_ID does not start with rzp_test_ or rzp_live_. Verify it is correct.',
+    );
+  } else {
+    console.log(
+      `✅ Razorpay configured in ${idIsTest ? 'TEST' : 'LIVE'} mode.`,
+    );
+  }
+}
+
+if (!_env.data.RAZORPAY_WEBHOOK_SECRET) {
+  console.warn(
+    '⚠️  RAZORPAY_WEBHOOK_SECRET is not set. Webhook verification will fail.',
+  );
+}
