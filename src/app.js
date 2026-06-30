@@ -11,6 +11,9 @@ import { ApiError } from './utils/ApiError.js';
 
 const app = express();
 
+// Trust proxy to ensure correct client IP for rate limiting behind reverse proxies
+app.set('trust proxy', 1);
+
 // 1. Security Headers
 app.use(helmet());
 
