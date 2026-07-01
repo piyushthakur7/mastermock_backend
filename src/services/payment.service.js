@@ -1,0 +1,451 @@
+import Razorpay from 'razorpay';
+import crypto from 'crypto';
+import mongoose from 'mongoose';
+import { env } from '../config/env.js';
+import { Payment } from '../models/payment.model.js';
+import { Purchase } from '../models/purchase.model.js';
+import { Course } from '../models/course.model.js';
+import { MockTest } from '../models/mockTest.model.js';
+import { Enrollment } from '../models/enrollment.model.js';
+import { ApiError } from '../utils/ApiError.js';
+import { logger } from '../utils/logger.js';
+
+// ─── Razorpay Instance ─────────────────────────────────────────────
+let razorpayInstance = null;
+
+const getRazorpay = () => {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError(500, 'Razorpay API keys are not configured');
+  }
+  if (!razorpayInstance) {
+    razorpayInstance = new Razorpay({
+      key_id: env.RAZORPAY_KEY_ID,
+      key_secret: env.RAZORPAY_KEY_SECRET,
+    });
+  }
+  return razorpayInstance;
+};
+
+// ─── Helper: Look up item and validate price ────────────────────────
+const lookupItem = async (itemId, itemType) => {
+  let item = null;
+
+  if (itemType === 'Course') {
+    item = await Course.findOne({
+      _id: itemId,
+      isDeleted: false,
+      is_active: true,
+    });
+  } else if (itemType === 'MockTest') {
+    item = await MockTest.findOne({
+      _id: itemId,
+      isDeleted: false,
+      is_active: true,
+    });
+  }
+
+  if (!item) {
+    throw new ApiError(404, `${itemType} not found`);
+  }
+
+  if (item.access_type !== 'paid') {
+    throw new ApiError(
+      400,
+      `This ${itemType.toLowerCase()} is free, no payment required`,
+    );
+  }
+
+  if (!item.price || item.price <= 0) {
+    throw new ApiError(400, `Invalid price for ${itemType.toLowerCase()}`);
+  }
+
+  return item;
+};
+
+// ─── Helper: Grant access (Purchase + Enrollment) ───────────────────
+const grantAccess = async (payment, userId, session) => {
+  // Create Purchase if not already exists
+  const existingPurchase = await Purchase.findOne({
+    user: userId,
+    item_id: payment.item_id,
+    item_type: payment.item_type,
+    status: 'ACTIVE',
+  }).session(session);
+
+  if (!existingPurchase) {
+    await Purchase.create(
+      [
+        {
+          user: userId,
+          item_id: payment.item_id,
+          item_type: payment.item_type,
+          payment: payment._id,
+          amount: payment.amount,
+          status: 'ACTIVE',
+        },
+      ],
+      { session },
+    );
+    logger.info(`Purchase created for user=${userId}, item=${payment.item_id}`);
+  }
+
+  // Auto-enroll if Course
+  if (payment.item_type === 'Course') {
+    const existingEnrollment = await Enrollment.findOne({
+      user: userId,
+      course: payment.item_id,
+    }).session(session);
+
+    if (!existingEnrollment) {
+      await Enrollment.create(
+        [
+          {
+            user: userId,
+            course: payment.item_id,
+          },
+        ],
+        { session },
+      );
+      logger.info(
+        `Enrollment created for user=${userId}, course=${payment.item_id}`,
+      );
+    }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 1. CREATE ORDER
+// ═══════════════════════════════════════════════════════════════════════
+export const createOrder = async (userId, itemId, itemType) => {
+  // Validate the item and get server-side price
+  const item = await lookupItem(itemId, itemType);
+  const amount = item.price;
+
+  // Check if already purchased
+  const existingPurchase = await Purchase.findOne({
+    user: userId,
+    item_id: itemId,
+    item_type: itemType,
+    status: 'ACTIVE',
+  });
+
+  if (existingPurchase) {
+    throw new ApiError(400, 'You have already purchased this item');
+  }
+
+  // Idempotency: check for a recent PENDING payment for the same user+item
+  // This prevents duplicate orders from rapid double-clicks
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const existingPending = await Payment.findOne({
+    user: userId,
+    item_id: itemId,
+    item_type: itemType,
+    status: 'PENDING',
+    createdAt: { $gte: fiveMinutesAgo },
+  });
+
+  if (existingPending) {
+    logger.info(
+      `Returning existing pending order=${existingPending.razorpay_order_id} for user=${userId}`,
+    );
+    return {
+      order_id: existingPending.razorpay_order_id,
+      amount: existingPending.amount,
+      currency: existingPending.currency,
+      key_id: env.RAZORPAY_KEY_ID,
+    };
+  }
+
+  // Create Razorpay order
+  const razorpay = getRazorpay();
+  const amountInPaise = Math.round(amount * 100);
+
+  let order;
+  try {
+    order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `receipt_${Date.now()}_${userId.toString().slice(-6)}`,
+    });
+  } catch (error) {
+    logger.error(`Razorpay order creation failed: ${error.message}`);
+    throw new ApiError(
+      500,
+      'Failed to create payment order. Please try again.',
+    );
+  }
+
+  if (!order || !order.id) {
+    throw new ApiError(500, 'Failed to create payment order');
+  }
+
+  // Save pending payment record
+  await Payment.create({
+    user: userId,
+    razorpay_order_id: order.id,
+    amount,
+    currency: 'INR',
+    item_id: itemId,
+    item_type: itemType,
+    status: 'PENDING',
+  });
+
+  logger.info(
+    `Order created: ${order.id} for user=${userId}, item=${itemId}, amount=${amount}`,
+  );
+
+  return {
+    order_id: order.id,
+    amount,
+    currency: 'INR',
+    key_id: env.RAZORPAY_KEY_ID,
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 2. VERIFY PAYMENT
+// ═══════════════════════════════════════════════════════════════════════
+export const verifyPayment = async (
+  userId,
+  razorpayOrderId,
+  razorpayPaymentId,
+  razorpaySignature,
+) => {
+  // Find the payment record
+  const payment = await Payment.findOne({ razorpay_order_id: razorpayOrderId });
+
+  if (!payment) {
+    throw new ApiError(404, 'Payment order not found');
+  }
+
+  // If already verified (e.g. by webhook), return immediately
+  if (payment.status === 'SUCCESS') {
+    logger.info(`Payment already verified: order=${razorpayOrderId}`);
+    return payment;
+  }
+
+  // Security: ensure the payment belongs to the requesting user
+  if (payment.user.toString() !== userId.toString()) {
+    throw new ApiError(
+      403,
+      'Unauthorized: payment does not belong to this user',
+    );
+  }
+
+  // HMAC signature verification — no fallback
+  if (!env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError(500, 'Razorpay key secret is not configured');
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+    .digest('hex');
+
+  const isValid = crypto.timingSafeEqual(
+    Buffer.from(expectedSignature, 'hex'),
+    Buffer.from(razorpaySignature, 'hex'),
+  );
+
+  if (!isValid) {
+    logger.warn(`Signature mismatch for order=${razorpayOrderId}. Rejecting.`);
+    // Mark as failed
+    await Payment.findOneAndUpdate(
+      { _id: payment._id, status: 'PENDING' },
+      { $set: { status: 'FAILED' } },
+    );
+    throw new ApiError(400, 'Payment verification failed: invalid signature');
+  }
+
+  // Signature valid — proceed with atomic success update inside a transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Atomic state transition: PENDING → SUCCESS
+    const updatedPayment = await Payment.findOneAndUpdate(
+      { _id: payment._id, status: 'PENDING' },
+      {
+        $set: {
+          status: 'SUCCESS',
+          razorpay_payment_id: razorpayPaymentId,
+          razorpay_signature: razorpaySignature,
+        },
+      },
+      { new: true, session },
+    );
+
+    // If null, it was already processed (webhook race condition)
+    if (!updatedPayment) {
+      await session.abortTransaction();
+      session.endSession();
+
+      const currentPayment = await Payment.findById(payment._id);
+      if (currentPayment && currentPayment.status === 'SUCCESS') {
+        logger.info(
+          `Payment already processed by webhook: order=${razorpayOrderId}`,
+        );
+        return currentPayment;
+      }
+      throw new ApiError(400, 'Payment could not be verified (invalid status)');
+    }
+
+    // Grant access (Purchase + Enrollment)
+    await grantAccess(updatedPayment, userId, session);
+
+    await session.commitTransaction();
+    session.endSession();
+
+    logger.info(
+      `Payment verified successfully: order=${razorpayOrderId}, payment=${razorpayPaymentId}`,
+    );
+    return updatedPayment;
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
+    // Handle duplicate key errors from webhook race conditions
+    if (error.code === 11000) {
+      logger.warn(
+        `Duplicate key during verify for order=${razorpayOrderId}. Checking final state.`,
+      );
+      const currentPayment = await Payment.findById(payment._id);
+      if (currentPayment && currentPayment.status === 'SUCCESS') {
+        return currentPayment;
+      }
+    }
+
+    // Re-throw ApiErrors as-is
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    logger.error(
+      `Transaction failed during verify: order=${razorpayOrderId}, error=${error.message}`,
+    );
+    throw new ApiError(
+      500,
+      'Payment was verified but processing failed. Please contact support.',
+    );
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 3. WEBHOOK HANDLER
+// ═══════════════════════════════════════════════════════════════════════
+export const handleWebhook = async (rawBody, signature) => {
+  const webhookSecret = env.RAZORPAY_WEBHOOK_SECRET;
+
+  if (!signature || !webhookSecret) {
+    logger.error('Webhook: missing signature or secret');
+    throw new ApiError(400, 'Webhook Error: Missing signature or secret');
+  }
+
+  // Verify webhook HMAC signature
+  const expectedSignature = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(rawBody)
+    .digest('hex');
+
+  if (signature !== expectedSignature) {
+    logger.error('Webhook: signature verification failed');
+    throw new ApiError(400, 'Webhook Error: Invalid signature');
+  }
+
+  const body = JSON.parse(rawBody);
+  const event = body.event;
+
+  logger.info(`Webhook received: event=${event}`);
+
+  // Handle payment success events
+  if (['payment.captured', 'order.paid'].includes(event)) {
+    const paymentEntity = body.payload.payment.entity;
+    const { id: razorpayPaymentId, order_id: razorpayOrderId } = paymentEntity;
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const payment = await Payment.findOne({
+        razorpay_order_id: razorpayOrderId,
+      }).session(session);
+
+      if (!payment) {
+        logger.warn(`Webhook: no payment found for order=${razorpayOrderId}`);
+        await session.abortTransaction();
+        session.endSession();
+        return; // Return OK to acknowledge receipt
+      }
+
+      // Skip if already processed
+      if (payment.status === 'SUCCESS') {
+        logger.info(
+          `Webhook: payment already processed for order=${razorpayOrderId}`,
+        );
+        await session.abortTransaction();
+        session.endSession();
+        return;
+      }
+
+      // Update payment
+      payment.status = 'SUCCESS';
+      payment.razorpay_payment_id = razorpayPaymentId;
+      payment.razorpay_signature = signature;
+      await payment.save({ session });
+
+      // Grant access
+      await grantAccess(payment, payment.user, session);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      logger.info(`Webhook: successfully processed order=${razorpayOrderId}`);
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      logger.error(
+        `Webhook: processing error for order=${razorpayOrderId}: ${error.message}`,
+      );
+      throw new ApiError(500, 'Webhook processing error');
+    }
+  }
+
+  // Handle payment failure events
+  if (event === 'payment.failed') {
+    const paymentEntity = body.payload.payment.entity;
+    const { order_id: razorpayOrderId } = paymentEntity;
+
+    try {
+      const payment = await Payment.findOne({
+        razorpay_order_id: razorpayOrderId,
+      });
+      if (payment && payment.status !== 'SUCCESS') {
+        payment.status = 'FAILED';
+        await payment.save();
+        logger.info(
+          `Webhook: marked payment as FAILED for order=${razorpayOrderId}`,
+        );
+      }
+    } catch (error) {
+      logger.error(
+        `Webhook: failed to update failed payment for order=${razorpayOrderId}: ${error.message}`,
+      );
+    }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4. GET MY PURCHASES
+// ═══════════════════════════════════════════════════════════════════════
+export const getMyPurchases = async (userId) => {
+  return Purchase.find({ user: userId, status: 'ACTIVE' })
+    .populate('item_id')
+    .sort({ createdAt: -1 });
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 5. GET MY PAYMENT HISTORY
+// ═══════════════════════════════════════════════════════════════════════
+export const getMyHistory = async (userId) => {
+  return Payment.find({ user: userId }).sort({ createdAt: -1 });
+};

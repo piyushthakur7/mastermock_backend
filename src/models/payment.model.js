@@ -26,7 +26,7 @@ const paymentSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ['PENDING', 'SUCCESS', 'FAILED', 'REFUNDED'],
+      enum: ['PENDING', 'SUCCESS', 'FAILED', 'CANCELLED', 'REFUNDED'],
       default: 'PENDING',
       index: true,
     },
@@ -35,4 +35,8 @@ const paymentSchema = new Schema(
 );
 
 paymentSchema.plugin(mongooseAggregatePaginate);
+
+// Compound index for idempotency checks during order creation
+paymentSchema.index({ user: 1, item_id: 1, status: 1 });
+
 export const Payment = mongoose.model('Payment', paymentSchema);

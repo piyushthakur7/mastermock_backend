@@ -515,6 +515,26 @@ GET /api/v1/payments/my-history
 
 ---
 
+### 4.7 Webhook Fallback (Delayed Payments)
+
+**Endpoint:** `POST /api/v1/payments/webhook` (Internal/Razorpay only)
+
+**Overview:**
+We have implemented a Razorpay Webhook on the backend to handle delayed UPI payment confirmations.
+
+Sometimes the UPI network is slow. A user might pay, the money gets deducted, but the Razorpay checkout modal stays loading and the frontend `handler` callback never runs. In this scenario, `/payments/verify` is never called by the frontend, so the user doesn't get access immediately.
+
+**How we solve it:**
+- When Razorpay finally gets confirmation from the bank (even 5-10 minutes later), it sends a `payment.captured` webhook to the backend.
+- The backend verifies the webhook and automatically marks the payment as `SUCCESS`, creating the `Purchase` record and auto-enrolling the student.
+
+**Impact on Frontend:**
+- **No code changes are required on the frontend.**
+- Continue using the standard Razorpay checkout flow and your existing `handler`.
+- **Customer Support:** If a user complains about "money deducted but test not unlocked", you can assure them that the backend webhook will automatically grant them access as soon as the bank confirms the payment to Razorpay. No manual intervention is needed.
+
+---
+
 ## 5. Resources / PDFs
 
 > **All PDFs are FREE for logged-in users. No purchase needed.**
