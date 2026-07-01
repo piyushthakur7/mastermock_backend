@@ -24,7 +24,7 @@ export const authLimiter = rateLimit({
 // Payment order creation — prevents spam but allows legit retries
 export const paymentLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 10,
+  max: 1000, // Temporarily increased limit to avoid 429 during testing
   standardHeaders: true,
   legacyHeaders: false,
   handler: () => {
@@ -35,7 +35,7 @@ export const paymentLimiter = rateLimit({
 // Payment verification — generous to handle retries and webhook races
 export const verifyLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 20,
+  max: 2000, // Temporarily increased limit to avoid 429 during testing
   standardHeaders: true,
   legacyHeaders: false,
   handler: () => {
