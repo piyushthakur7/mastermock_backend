@@ -242,10 +242,17 @@ export const verifyPayment = async (
     .update(`${razorpayOrderId}|${razorpayPaymentId}`)
     .digest('hex');
 
-  const isValid = crypto.timingSafeEqual(
-    Buffer.from(expectedSignature, 'hex'),
-    Buffer.from(razorpaySignature, 'hex'),
-  );
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  const signatureBuffer = Buffer.from(razorpaySignature || '', 'hex');
+
+  let isValid = false;
+  if (expectedBuffer.length === signatureBuffer.length) {
+    isValid = crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  } else {
+    logger.warn(
+      `Signature length mismatch for order=${razorpayOrderId}. Expected ${expectedBuffer.length}, got ${signatureBuffer.length}`,
+    );
+  }
 
   if (!isValid) {
     logger.warn(`Signature mismatch for order=${razorpayOrderId}. Rejecting.`);
@@ -347,7 +354,15 @@ export const handleWebhook = async (rawBody, signature) => {
     .update(rawBody)
     .digest('hex');
 
-  if (signature !== expectedSignature) {
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  const signatureBuffer = Buffer.from(signature || '', 'hex');
+
+  let isValid = false;
+  if (expectedBuffer.length === signatureBuffer.length) {
+    isValid = crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  }
+
+  if (!isValid) {
     logger.error('Webhook: signature verification failed');
     throw new ApiError(400, 'Webhook Error: Invalid signature');
   }
