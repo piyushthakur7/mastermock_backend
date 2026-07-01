@@ -231,6 +231,103 @@ export const getPaymentStatus = async (userId, razorpayOrderId) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
+// 2b. VERIFY PAYMENT (FRONTEND ACCELERATOR)
+// ═══════════════════════════════════════════════════════════════════════
+export const verifyPayment = async (
+  userId,
+  razorpayOrderId,
+  razorpayPaymentId,
+  razorpaySignature,
+) => {
+  // Find the payment record
+  const payment = await Payment.findOne({ razorpay_order_id: razorpayOrderId });
+
+  if (!payment) {
+    throw new ApiError(404, 'Payment order not found');
+  }
+
+  // If already verified (e.g. by webhook), return immediately
+  if (payment.status === 'SUCCESS') {
+    logger.info(`Payment already verified: order=${razorpayOrderId}`);
+    return payment;
+  }
+
+  // Security: ensure the payment belongs to the requesting user
+  if (payment.user.toString() !== userId.toString()) {
+    throw new ApiError(
+      403,
+      'Unauthorized: payment does not belong to this user',
+    );
+  }
+
+  // HMAC signature verification — no fallback
+  if (!env.RAZORPAY_KEY_SECRET) {
+    throw new ApiError(500, 'Razorpay key secret is not configured');
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
+    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+    .digest('hex');
+
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  const signatureBuffer = Buffer.from(razorpaySignature || '', 'hex');
+
+  let isValid = false;
+  if (expectedBuffer.length === signatureBuffer.length) {
+    isValid = crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  } else {
+    logger.warn(
+      `Signature length mismatch for order=${razorpayOrderId}. Expected ${expectedBuffer.length}, got ${signatureBuffer.length}`,
+    );
+  }
+
+  if (!isValid) {
+    throw new ApiError(400, 'Payment verification failed: invalid signature');
+  }
+
+  // Signature valid — proceed with atomic success update
+  try {
+    const updatedPayment = await Payment.findOneAndUpdate(
+      { _id: payment._id, status: 'PENDING' },
+      {
+        $set: {
+          status: 'SUCCESS',
+          razorpay_payment_id: razorpayPaymentId,
+          razorpay_signature: razorpaySignature,
+        },
+      },
+      { new: true },
+    );
+
+    if (!updatedPayment) {
+      const currentPayment = await Payment.findById(payment._id);
+      if (currentPayment && currentPayment.status === 'SUCCESS') {
+        return currentPayment;
+      }
+      throw new ApiError(400, 'Payment could not be verified (invalid status)');
+    }
+
+    // Grant access (Purchase + Enrollment)
+    await grantAccess(updatedPayment, userId);
+
+    logger.info(
+      `Payment verified successfully via accelerator: order=${razorpayOrderId}`,
+    );
+    return updatedPayment;
+  } catch (error) {
+    if (error.code === 11000) {
+      const currentPayment = await Payment.findById(payment._id);
+      if (currentPayment && currentPayment.status === 'SUCCESS') {
+        return currentPayment;
+      }
+    }
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Payment was verified but processing failed.');
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
 // 3. WEBHOOK HANDLER
 // ═══════════════════════════════════════════════════════════════════════
 export const handleWebhook = async (rawBody, signature) => {

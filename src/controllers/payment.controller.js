@@ -46,6 +46,32 @@ export const getPaymentStatus = asyncHandler(async (req, res) => {
   );
 });
 
+// @desc    Verify payment signature (Frontend Accelerator)
+// @route   POST /api/v1/payments/verify
+// @access  Private/Student
+export const verifyPayment = asyncHandler(async (req, res) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+    req.body;
+
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    throw new ApiError(
+      400,
+      'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required',
+    );
+  }
+
+  const payment = await paymentService.verifyPayment(
+    req.user._id,
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+  );
+
+  return res.json(
+    new ApiResponse(200, payment, 'Payment verified successfully'),
+  );
+});
+
 // @desc    Razorpay webhook handler
 // @route   POST /api/v1/payments/webhook
 // @access  Public (HMAC-authenticated)
