@@ -72,17 +72,6 @@ export const verifyPayment = asyncHandler(async (req, res) => {
   );
 });
 
-// @desc    Razorpay webhook handler
-// @route   POST /api/v1/payments/webhook
-// @access  Public (HMAC-authenticated)
-export const handleWebhook = asyncHandler(async (req, res) => {
-  const signature = req.headers['x-razorpay-signature'];
-
-  await paymentService.handleWebhook(req.rawBody, signature);
-
-  return res.status(200).send('OK');
-});
-
 // @desc    Get my active purchases
 // @route   GET /api/v1/payments/my-purchases
 // @access  Private/Student

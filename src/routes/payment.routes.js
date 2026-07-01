@@ -8,16 +8,11 @@ import {
   createOrder,
   verifyPayment,
   getPaymentStatus,
-  handleWebhook,
   getMyPurchases,
   getMyHistory,
 } from '../controllers/payment.controller.js';
 
 const router = Router();
-
-// ─── Public route (HMAC-authenticated, no JWT) ──────────────────────
-// Must be BEFORE verifyJWT middleware
-router.post('/webhook', handleWebhook);
 
 // ─── Protected routes ───────────────────────────────────────────────
 router.use(verifyJWT);
