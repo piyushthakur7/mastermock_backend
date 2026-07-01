@@ -26,29 +26,23 @@ export const createOrder = asyncHandler(async (req, res) => {
   return res.json(new ApiResponse(200, orderData, 'Order created'));
 });
 
-// @desc    Verify payment signature
-// @route   POST /api/v1/payments/verify
+// @desc    Get payment status
+// @route   GET /api/v1/payments/status/:orderId
 // @access  Private/Student
-export const verifyPayment = asyncHandler(async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
-    req.body;
+export const getPaymentStatus = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
 
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-    throw new ApiError(
-      400,
-      'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required',
-    );
+  if (!orderId) {
+    throw new ApiError(400, 'orderId is required');
   }
 
-  const payment = await paymentService.verifyPayment(
+  const statusData = await paymentService.getPaymentStatus(
     req.user._id,
-    razorpay_order_id,
-    razorpay_payment_id,
-    razorpay_signature,
+    orderId,
   );
 
   return res.json(
-    new ApiResponse(200, payment, 'Payment verified successfully'),
+    new ApiResponse(200, statusData, 'Payment status fetched successfully'),
   );
 });
 

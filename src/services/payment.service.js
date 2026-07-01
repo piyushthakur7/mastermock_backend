@@ -204,25 +204,14 @@ export const createOrder = async (userId, itemId, itemType) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// 2. VERIFY PAYMENT
+// 2. GET PAYMENT STATUS (NEW FLOW)
 // ═══════════════════════════════════════════════════════════════════════
-export const verifyPayment = async (
-  userId,
-  razorpayOrderId,
-  razorpayPaymentId,
-  razorpaySignature,
-) => {
+export const getPaymentStatus = async (userId, razorpayOrderId) => {
   // Find the payment record
   const payment = await Payment.findOne({ razorpay_order_id: razorpayOrderId });
 
   if (!payment) {
     throw new ApiError(404, 'Payment order not found');
-  }
-
-  // If already verified (e.g. by webhook), return immediately
-  if (payment.status === 'SUCCESS') {
-    logger.info(`Payment already verified: order=${razorpayOrderId}`);
-    return payment;
   }
 
   // Security: ensure the payment belongs to the requesting user
@@ -233,126 +222,12 @@ export const verifyPayment = async (
     );
   }
 
-  // HMAC signature verification — no fallback
-  if (!env.RAZORPAY_KEY_SECRET) {
-    throw new ApiError(500, 'Razorpay key secret is not configured');
-  }
-
-  const expectedSignature = crypto
-    .createHmac('sha256', env.RAZORPAY_KEY_SECRET)
-    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-    .digest('hex');
-
-  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-  const signatureBuffer = Buffer.from(razorpaySignature || '', 'hex');
-
-  let isValid = false;
-  if (expectedBuffer.length === signatureBuffer.length) {
-    isValid = crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
-  } else {
-    logger.warn(
-      `Signature length mismatch for order=${razorpayOrderId}. Expected ${expectedBuffer.length}, got ${signatureBuffer.length}`,
-    );
-  }
-
-  if (!isValid) {
-    logger.warn(
-      `Signature mismatch for order=${razorpayOrderId}. Attempting API fallback verification.`,
-    );
-    try {
-      const razorpay = getRazorpay();
-      const razorpayPayment = await razorpay.payments.fetch(razorpayPaymentId);
-
-      if (
-        razorpayPayment.status === 'captured' &&
-        razorpayPayment.order_id === razorpayOrderId &&
-        razorpayPayment.amount === Math.round(payment.amount * 100)
-      ) {
-        logger.info(
-          `✅ Razorpay API confirms payment ${razorpayPaymentId} is captured. Proceeding.`,
-        );
-        isValid = true;
-      } else {
-        logger.error(
-          `❌ Razorpay API check failed for ${razorpayPaymentId}. Status: ${razorpayPayment.status}`,
-        );
-      }
-    } catch (apiError) {
-      logger.error(
-        `❌ Razorpay API fallback failed for ${razorpayPaymentId}: ${apiError.message}`,
-      );
-    }
-  }
-
-  if (!isValid) {
-    logger.warn(`Signature mismatch for order=${razorpayOrderId}. Rejecting.`);
-    // Mark as failed
-    await Payment.findOneAndUpdate(
-      { _id: payment._id, status: 'PENDING' },
-      { $set: { status: 'FAILED' } },
-    );
-    throw new ApiError(400, 'Payment verification failed: invalid signature');
-  }
-
-  // Signature valid — proceed with atomic success update
-  try {
-    // Atomic state transition: PENDING → SUCCESS
-    const updatedPayment = await Payment.findOneAndUpdate(
-      { _id: payment._id, status: 'PENDING' },
-      {
-        $set: {
-          status: 'SUCCESS',
-          razorpay_payment_id: razorpayPaymentId,
-          razorpay_signature: razorpaySignature,
-        },
-      },
-      { new: true },
-    );
-
-    // If null, it was already processed (webhook race condition)
-    if (!updatedPayment) {
-      const currentPayment = await Payment.findById(payment._id);
-      if (currentPayment && currentPayment.status === 'SUCCESS') {
-        logger.info(
-          `Payment already processed by webhook: order=${razorpayOrderId}`,
-        );
-        return currentPayment;
-      }
-      throw new ApiError(400, 'Payment could not be verified (invalid status)');
-    }
-
-    // Grant access (Purchase + Enrollment)
-    await grantAccess(updatedPayment, userId);
-
-    logger.info(
-      `Payment verified successfully: order=${razorpayOrderId}, payment=${razorpayPaymentId}`,
-    );
-    return updatedPayment;
-  } catch (error) {
-    // Handle duplicate key errors from webhook race conditions
-    if (error.code === 11000) {
-      logger.warn(
-        `Duplicate key during verify for order=${razorpayOrderId}. Checking final state.`,
-      );
-      const currentPayment = await Payment.findById(payment._id);
-      if (currentPayment && currentPayment.status === 'SUCCESS') {
-        return currentPayment;
-      }
-    }
-
-    // Re-throw ApiErrors as-is
-    if (error instanceof ApiError) {
-      throw error;
-    }
-
-    logger.error(
-      `Processing failed during verify: order=${razorpayOrderId}, error=${error.message}`,
-    );
-    throw new ApiError(
-      500,
-      'Payment was verified but processing failed. Please contact support.',
-    );
-  }
+  // Return the current status from our DB
+  return {
+    status: payment.status,
+    order_id: payment.razorpay_order_id,
+    payment_id: payment.razorpay_payment_id,
+  };
 };
 
 // ═══════════════════════════════════════════════════════════════════════
