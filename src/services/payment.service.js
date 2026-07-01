@@ -63,30 +63,32 @@ const lookupItem = async (itemId, itemType) => {
 };
 
 // ─── Helper: Grant access (Purchase + Enrollment) ───────────────────
-const grantAccess = async (payment, userId, session) => {
+const grantAccess = async (payment, userId) => {
   // Create Purchase if not already exists
   const existingPurchase = await Purchase.findOne({
     user: userId,
     item_id: payment.item_id,
     item_type: payment.item_type,
     status: 'ACTIVE',
-  }).session(session);
+  });
 
   if (!existingPurchase) {
-    await Purchase.create(
-      [
-        {
-          user: userId,
-          item_id: payment.item_id,
-          item_type: payment.item_type,
-          payment: payment._id,
-          amount: payment.amount,
-          status: 'ACTIVE',
-        },
-      ],
-      { session },
-    );
-    logger.info(`Purchase created for user=${userId}, item=${payment.item_id}`);
+    try {
+      await Purchase.create({
+        user: userId,
+        item_id: payment.item_id,
+        item_type: payment.item_type,
+        payment: payment._id,
+        amount: payment.amount,
+        status: 'ACTIVE',
+      });
+      logger.info(
+        `Purchase created for user=${userId}, item=${payment.item_id}`,
+      );
+    } catch (error) {
+      // Ignore duplicate key error if another process created it concurrently
+      if (error.code !== 11000) throw error;
+    }
   }
 
   // Auto-enroll if Course
@@ -94,21 +96,20 @@ const grantAccess = async (payment, userId, session) => {
     const existingEnrollment = await Enrollment.findOne({
       user: userId,
       course: payment.item_id,
-    }).session(session);
+    });
 
     if (!existingEnrollment) {
-      await Enrollment.create(
-        [
-          {
-            user: userId,
-            course: payment.item_id,
-          },
-        ],
-        { session },
-      );
-      logger.info(
-        `Enrollment created for user=${userId}, course=${payment.item_id}`,
-      );
+      try {
+        await Enrollment.create({
+          user: userId,
+          course: payment.item_id,
+        });
+        logger.info(
+          `Enrollment created for user=${userId}, course=${payment.item_id}`,
+        );
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+      }
     }
   }
 };
@@ -255,6 +256,35 @@ export const verifyPayment = async (
   }
 
   if (!isValid) {
+    logger.warn(
+      `Signature mismatch for order=${razorpayOrderId}. Attempting API fallback verification.`,
+    );
+    try {
+      const razorpay = getRazorpay();
+      const razorpayPayment = await razorpay.payments.fetch(razorpayPaymentId);
+
+      if (
+        razorpayPayment.status === 'captured' &&
+        razorpayPayment.order_id === razorpayOrderId &&
+        razorpayPayment.amount === Math.round(payment.amount * 100)
+      ) {
+        logger.info(
+          `✅ Razorpay API confirms payment ${razorpayPaymentId} is captured. Proceeding.`,
+        );
+        isValid = true;
+      } else {
+        logger.error(
+          `❌ Razorpay API check failed for ${razorpayPaymentId}. Status: ${razorpayPayment.status}`,
+        );
+      }
+    } catch (apiError) {
+      logger.error(
+        `❌ Razorpay API fallback failed for ${razorpayPaymentId}: ${apiError.message}`,
+      );
+    }
+  }
+
+  if (!isValid) {
     logger.warn(`Signature mismatch for order=${razorpayOrderId}. Rejecting.`);
     // Mark as failed
     await Payment.findOneAndUpdate(
@@ -264,10 +294,7 @@ export const verifyPayment = async (
     throw new ApiError(400, 'Payment verification failed: invalid signature');
   }
 
-  // Signature valid — proceed with atomic success update inside a transaction
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  // Signature valid — proceed with atomic success update
   try {
     // Atomic state transition: PENDING → SUCCESS
     const updatedPayment = await Payment.findOneAndUpdate(
@@ -279,14 +306,11 @@ export const verifyPayment = async (
           razorpay_signature: razorpaySignature,
         },
       },
-      { new: true, session },
+      { new: true },
     );
 
     // If null, it was already processed (webhook race condition)
     if (!updatedPayment) {
-      await session.abortTransaction();
-      session.endSession();
-
       const currentPayment = await Payment.findById(payment._id);
       if (currentPayment && currentPayment.status === 'SUCCESS') {
         logger.info(
@@ -298,19 +322,13 @@ export const verifyPayment = async (
     }
 
     // Grant access (Purchase + Enrollment)
-    await grantAccess(updatedPayment, userId, session);
-
-    await session.commitTransaction();
-    session.endSession();
+    await grantAccess(updatedPayment, userId);
 
     logger.info(
       `Payment verified successfully: order=${razorpayOrderId}, payment=${razorpayPaymentId}`,
     );
     return updatedPayment;
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-
     // Handle duplicate key errors from webhook race conditions
     if (error.code === 11000) {
       logger.warn(
@@ -328,7 +346,7 @@ export const verifyPayment = async (
     }
 
     logger.error(
-      `Transaction failed during verify: order=${razorpayOrderId}, error=${error.message}`,
+      `Processing failed during verify: order=${razorpayOrderId}, error=${error.message}`,
     );
     throw new ApiError(
       500,
@@ -367,7 +385,7 @@ export const handleWebhook = async (rawBody, signature) => {
     throw new ApiError(400, 'Webhook Error: Invalid signature');
   }
 
-  const body = JSON.parse(rawBody);
+  const body = JSON.parse(rawBody.toString('utf8'));
   const event = body.event;
 
   logger.info(`Webhook received: event=${event}`);
@@ -377,18 +395,13 @@ export const handleWebhook = async (rawBody, signature) => {
     const paymentEntity = body.payload.payment.entity;
     const { id: razorpayPaymentId, order_id: razorpayOrderId } = paymentEntity;
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
       const payment = await Payment.findOne({
         razorpay_order_id: razorpayOrderId,
-      }).session(session);
+      });
 
       if (!payment) {
         logger.warn(`Webhook: no payment found for order=${razorpayOrderId}`);
-        await session.abortTransaction();
-        session.endSession();
         return; // Return OK to acknowledge receipt
       }
 
@@ -397,27 +410,33 @@ export const handleWebhook = async (rawBody, signature) => {
         logger.info(
           `Webhook: payment already processed for order=${razorpayOrderId}`,
         );
-        await session.abortTransaction();
-        session.endSession();
         return;
       }
 
-      // Update payment
-      payment.status = 'SUCCESS';
-      payment.razorpay_payment_id = razorpayPaymentId;
-      payment.razorpay_signature = signature;
-      await payment.save({ session });
+      // Atomic Update payment to SUCCESS
+      const updatedPayment = await Payment.findOneAndUpdate(
+        { _id: payment._id, status: 'PENDING' },
+        {
+          $set: {
+            status: 'SUCCESS',
+            razorpay_payment_id: razorpayPaymentId,
+            razorpay_signature: signature,
+          },
+        },
+        { new: true },
+      );
 
-      // Grant access
-      await grantAccess(payment, payment.user, session);
-
-      await session.commitTransaction();
-      session.endSession();
-
-      logger.info(`Webhook: successfully processed order=${razorpayOrderId}`);
+      // If updatedPayment is null, it was updated by another request
+      if (updatedPayment) {
+        // Grant access
+        await grantAccess(updatedPayment, updatedPayment.user);
+        logger.info(`Webhook: successfully processed order=${razorpayOrderId}`);
+      } else {
+        logger.info(
+          `Webhook: payment processed concurrently for order=${razorpayOrderId}`,
+        );
+      }
     } catch (error) {
-      await session.abortTransaction();
-      session.endSession();
       logger.error(
         `Webhook: processing error for order=${razorpayOrderId}: ${error.message}`,
       );
