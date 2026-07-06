@@ -13,7 +13,7 @@ export const globalLimiter = rateLimit({
 
 export const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50, // limit each IP to 50 requests per windowMs for auth routes
+  max: 5000, // Temporarily increased limit to avoid 429 during testing
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_, __, ___, options) => {
