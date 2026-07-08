@@ -20,34 +20,49 @@ export const startTest = asyncHandler(async (req, res) => {
   });
   if (!mockTest) throw new ApiError(404, 'Mock test not found or inactive');
 
-  // Check if paid test requires purchase
-  if (mockTest.access_type === 'paid') {
-    const purchase = await Purchase.findOne({
-      user: userId,
-      item_id: mock_test_id,
-      item_type: 'MockTest',
-      status: 'ACTIVE',
-    });
-    if (!purchase) {
-      throw new ApiError(403, 'This is a paid test. Please purchase it first.');
-    }
-  }
-
-  // Check attempt limits
-  const existingAttempts = await TestAttempt.countDocuments({
-    user: userId,
-    mock_test: mock_test_id,
-  });
-  if (existingAttempts >= 3) {
-    throw new ApiError(400, 'Maximum attempt limit reached for this test');
-  }
-
-  // Check if there's already an IN_PROGRESS attempt
   let activeAttempt = await TestAttempt.findOne({
     user: userId,
     mock_test: mock_test_id,
     status: 'IN_PROGRESS',
   });
+
+  // Check if paid test requires purchase
+  if (mockTest.access_type === 'paid') {
+    if (mockTest.start_time && new Date() < new Date(mockTest.start_time)) {
+      throw new ApiError(
+        403,
+        'This test is not available yet. Please wait for the scheduled start time.',
+      );
+    }
+    if (mockTest.end_time && new Date() > new Date(mockTest.end_time)) {
+      throw new ApiError(
+        403,
+        'The scheduled time window for this test has ended.',
+      );
+    }
+    const purchaseCount = await Purchase.countDocuments({
+      user: userId,
+      item_id: mock_test_id,
+      item_type: 'MockTest',
+      status: 'ACTIVE',
+    });
+    if (purchaseCount === 0) {
+      throw new ApiError(403, 'This is a paid test. Please purchase it first.');
+    }
+
+    const attemptCount = await TestAttempt.countDocuments({
+      user: userId,
+      mock_test: mock_test_id,
+    });
+
+    // If they don't have an IN_PROGRESS attempt, check if they have unused purchases
+    if (!activeAttempt && attemptCount >= purchaseCount) {
+      throw new ApiError(
+        403,
+        'Maximum attempt limit reached. Please purchase the test again to retake it.',
+      );
+    }
+  }
 
   if (!activeAttempt) {
     activeAttempt = await TestAttempt.create({
@@ -209,4 +224,42 @@ export const evaluateTest = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, attempt, 'Test evaluated successfully'));
+});
+
+// @desc    Get all attempts for the logged-in student
+// @route   GET /api/v1/attempts/my
+// @access  Private/Student
+export const getMyAttempts = asyncHandler(async (req, res) => {
+  const attempts = await TestAttempt.find({ user: req.user._id })
+    .sort({ completed_at: -1, started_at: -1 })
+    .populate({
+      path: 'mock_test',
+      select: 'title course',
+      populate: { path: 'course', select: 'title' },
+    });
+
+  const formattedAttempts = attempts.map((att) => {
+    const obj = att.toObject();
+    const totalAttempted = obj.answers ? obj.answers.length : 0;
+    const correctAnswers = obj.answers
+      ? obj.answers.filter((a) => a.is_correct).length
+      : 0;
+
+    return {
+      ...obj,
+      test: obj.mock_test,
+      totalAttempted,
+      correctAnswers,
+    };
+  });
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { data: formattedAttempts },
+        'My attempts fetched successfully',
+      ),
+    );
 });

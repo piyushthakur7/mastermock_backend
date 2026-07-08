@@ -7,6 +7,7 @@ import { Purchase } from '../models/purchase.model.js';
 import { Course } from '../models/course.model.js';
 import { MockTest } from '../models/mockTest.model.js';
 import { Enrollment } from '../models/enrollment.model.js';
+import { TestAttempt } from '../models/testAttempt.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { logger } from '../utils/logger.js';
 
@@ -123,15 +124,51 @@ export const createOrder = async (userId, itemId, itemType) => {
   const amount = item.price;
 
   // Check if already purchased
-  const existingPurchase = await Purchase.findOne({
-    user: userId,
-    item_id: itemId,
-    item_type: itemType,
-    status: 'ACTIVE',
-  });
+  if (itemType === 'MockTest') {
+    const purchaseCount = await Purchase.countDocuments({
+      user: userId,
+      item_id: itemId,
+      item_type: itemType,
+      status: 'ACTIVE',
+    });
 
-  if (existingPurchase) {
-    throw new ApiError(400, 'You have already purchased this item');
+    if (purchaseCount > 0) {
+      const attemptCount = await TestAttempt.countDocuments({
+        user: userId,
+        mock_test: itemId,
+      });
+
+      const activeAttempt = await TestAttempt.findOne({
+        user: userId,
+        mock_test: itemId,
+        status: 'IN_PROGRESS',
+      });
+
+      if (activeAttempt) {
+        throw new ApiError(
+          400,
+          'You are currently taking this test. Please finish it first.',
+        );
+      }
+
+      if (purchaseCount > attemptCount) {
+        throw new ApiError(
+          400,
+          'You already have an unused purchase for this mock test. Please use it first.',
+        );
+      }
+    }
+  } else {
+    const existingPurchase = await Purchase.findOne({
+      user: userId,
+      item_id: itemId,
+      item_type: itemType,
+      status: 'ACTIVE',
+    });
+
+    if (existingPurchase) {
+      throw new ApiError(400, 'You have already purchased this item');
+    }
   }
 
   // Idempotency: check for a recent PENDING payment for the same user+item
@@ -220,6 +257,47 @@ export const getPaymentStatus = async (userId, razorpayOrderId) => {
       403,
       'Unauthorized: payment does not belong to this user',
     );
+  }
+
+  // If still pending, actively check Razorpay API to fix mobile redirect losses
+  if (payment.status === 'PENDING') {
+    try {
+      const razorpay = getRazorpay();
+      const rzpOrder = await razorpay.orders.fetch(razorpayOrderId);
+
+      if (rzpOrder && rzpOrder.status === 'paid') {
+        const payments = await razorpay.orders.fetchPayments(razorpayOrderId);
+        const successfulPayment = payments.items.find(
+          (p) => p.status === 'captured' || p.status === 'authorized',
+        );
+
+        if (successfulPayment) {
+          const updatedPayment = await Payment.findOneAndUpdate(
+            { _id: payment._id, status: 'PENDING' },
+            {
+              $set: {
+                status: 'SUCCESS',
+                razorpay_payment_id: successfulPayment.id,
+              },
+            },
+            { new: true },
+          );
+
+          if (updatedPayment) {
+            await grantAccess(updatedPayment, userId);
+            payment.status = 'SUCCESS';
+            payment.razorpay_payment_id = successfulPayment.id;
+            logger.info(
+              `Auto-verified pending order=${razorpayOrderId} via active status check.`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      logger.error(
+        `Failed to actively fetch order status for ${razorpayOrderId}: ${err.message}`,
+      );
+    }
   }
 
   // Return the current status from our DB

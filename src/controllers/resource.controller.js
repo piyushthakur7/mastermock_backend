@@ -85,6 +85,7 @@ export const getAllResources = asyncHandler(async (req, res) => {
   // Optional filtering by category or resource_type
   if (req.query.category) filter.category = req.query.category;
   if (req.query.resource_type) filter.resource_type = req.query.resource_type;
+  if (req.query.access_type) filter.access_type = req.query.access_type;
 
   const resources = await Resource.find(filter)
     .populate('category', 'name')

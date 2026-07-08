@@ -14,12 +14,20 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
   const attempts = await TestAttempt.find({
     user: req.user._id,
     status: 'COMPLETED',
-  });
+  })
+    .sort({ completed_at: -1 })
+    .populate('mock_test', 'title');
 
   const avgScore =
     attempts.length > 0
       ? attempts.reduce((acc, curr) => acc + curr.score, 0) / attempts.length
       : 0;
+
+  const recentActivity = attempts.slice(0, 5).map((attempt) => ({
+    type: 'TEST_ATTEMPT',
+    title: `Attempted: ${attempt.mock_test?.title || 'Unknown Test'}`,
+    date: attempt.completed_at || attempt.started_at,
+  }));
 
   res.json(
     new ApiResponse(
@@ -27,7 +35,7 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
       {
         totalAttempts,
         avgScore: avgScore.toFixed(2),
-        recentActivity: attempts.slice(0, 5), // Last 5 attempts
+        recentActivity,
       },
       'Student dashboard fetched',
     ),

@@ -5,6 +5,7 @@ import {
   submitTest,
   getAttempt,
   evaluateTest,
+  getMyAttempts,
 } from '../controllers/testAttempt.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
@@ -18,6 +19,7 @@ const router = Router();
 // All routes require student login
 router.use(verifyJWT);
 
+router.get('/my', getMyAttempts);
 router.post('/start', validate(startTestSchema), startTest);
 router.put('/:attemptId/answer', validate(saveAnswerSchema), saveAnswer);
 router.post('/:attemptId/submit', submitTest);

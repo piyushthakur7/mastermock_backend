@@ -154,9 +154,22 @@ export const getMockTests = asyncHandler(async (req, res) => {
   const filter = { isDeleted: false };
   if (!req.user || req.user.role !== 'ADMIN') filter.is_active = true;
 
-  const mockTests = await MockTest.find(filter)
+  if (req.query.access_type) {
+    filter.access_type = req.query.access_type;
+  }
+  if (req.query.category) {
+    filter.category = req.query.category;
+  }
+
+  let query = MockTest.find(filter)
     .select('-questions.options.is_correct') // Hide correct answers for students
     .sort({ createdAt: -1 });
+
+  if (req.query.limit) {
+    query = query.limit(parseInt(req.query.limit, 10));
+  }
+
+  const mockTests = await query;
 
   return res
     .status(200)

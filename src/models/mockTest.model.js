@@ -38,6 +38,8 @@ const mockTestSchema = new Schema(
     negative_marks_per_wrong: { type: Number, default: 0 },
     total_marks: { type: Number, required: true },
     duration_minutes: { type: Number, required: true },
+    start_time: { type: Date },
+    end_time: { type: Date },
 
     created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     is_active: { type: Boolean, default: true, index: true },

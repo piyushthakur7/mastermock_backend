@@ -21,6 +21,12 @@ const resourceSchema = new Schema(
       enum: ['pdf', 'video', 'notes', 'assignment', 'solution'],
       required: true,
     },
+    access_type: {
+      type: String,
+      enum: ['free', 'paid'],
+      default: 'free',
+      index: true,
+    },
     created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     is_active: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },
