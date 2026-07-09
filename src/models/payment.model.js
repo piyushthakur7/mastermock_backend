@@ -22,7 +22,7 @@ const paymentSchema = new Schema(
     item_type: {
       type: String,
       required: true,
-      enum: ['Course', 'MockTest'],
+      enum: ['Course', 'Hack'],
     },
     status: {
       type: String,

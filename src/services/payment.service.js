@@ -5,7 +5,7 @@ import { env } from '../config/env.js';
 import { Payment } from '../models/payment.model.js';
 import { Purchase } from '../models/purchase.model.js';
 import { Course } from '../models/course.model.js';
-import { MockTest } from '../models/mockTest.model.js';
+import { Hack } from '../models/hack.model.js';
 import { Enrollment } from '../models/enrollment.model.js';
 import { TestAttempt } from '../models/testAttempt.model.js';
 import { ApiError } from '../utils/ApiError.js';
@@ -37,8 +37,8 @@ const lookupItem = async (itemId, itemType) => {
       isDeleted: false,
       is_active: true,
     });
-  } else if (itemType === 'MockTest') {
-    item = await MockTest.findOne({
+  } else if (itemType === 'Hack') {
+    item = await Hack.findOne({
       _id: itemId,
       isDeleted: false,
       is_active: true,
@@ -124,7 +124,7 @@ export const createOrder = async (userId, itemId, itemType) => {
   const amount = item.price;
 
   // Check if already purchased
-  if (itemType === 'MockTest') {
+  if (itemType === 'Hack') {
     const purchaseCount = await Purchase.countDocuments({
       user: userId,
       item_id: itemId,
@@ -135,26 +135,26 @@ export const createOrder = async (userId, itemId, itemType) => {
     if (purchaseCount > 0) {
       const attemptCount = await TestAttempt.countDocuments({
         user: userId,
-        mock_test: itemId,
+        hack: itemId,
       });
 
       const activeAttempt = await TestAttempt.findOne({
         user: userId,
-        mock_test: itemId,
+        hack: itemId,
         status: 'IN_PROGRESS',
       });
 
       if (activeAttempt) {
         throw new ApiError(
           400,
-          'You are currently taking this test. Please finish it first.',
+          'You are currently taking this hack. Please finish it first.',
         );
       }
 
       if (purchaseCount > attemptCount) {
         throw new ApiError(
           400,
-          'You already have an unused purchase for this mock test. Please use it first.',
+          'You already have an unused purchase for this hack. Please use it first.',
         );
       }
     }

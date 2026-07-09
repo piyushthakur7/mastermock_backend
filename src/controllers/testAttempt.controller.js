@@ -1,5 +1,5 @@
 import { TestAttempt } from '../models/testAttempt.model.js';
-import { MockTest } from '../models/mockTest.model.js';
+import { Hack } from '../models/hack.model.js';
 import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
@@ -10,56 +10,56 @@ import { scheduleAutoSubmit } from '../jobs/examQueue.js';
 // @route   POST /api/v1/attempts/start
 // @access  Private/Student
 export const startTest = asyncHandler(async (req, res) => {
-  const { mock_test_id } = req.body;
+  const hack_id = req.body.hack_id || req.body.mock_test_id; // Support both for now
   const userId = req.user._id;
 
-  const mockTest = await MockTest.findOne({
-    _id: mock_test_id,
+  const hack = await Hack.findOne({
+    _id: hack_id,
     isDeleted: false,
     is_active: true,
   });
-  if (!mockTest) throw new ApiError(404, 'Mock test not found or inactive');
+  if (!hack) throw new ApiError(404, 'Hack not found or inactive');
 
   let activeAttempt = await TestAttempt.findOne({
     user: userId,
-    mock_test: mock_test_id,
+    hack: hack_id,
     status: 'IN_PROGRESS',
   });
 
   // Check if paid test requires purchase
-  if (mockTest.access_type === 'paid') {
-    if (mockTest.start_time && new Date() < new Date(mockTest.start_time)) {
+  if (hack.access_type === 'paid') {
+    if (hack.start_time && new Date() < new Date(hack.start_time)) {
       throw new ApiError(
         403,
-        'This test is not available yet. Please wait for the scheduled start time.',
+        'This hack is not available yet. Please wait for the scheduled start time.',
       );
     }
-    if (mockTest.end_time && new Date() > new Date(mockTest.end_time)) {
+    if (hack.end_time && new Date() > new Date(hack.end_time)) {
       throw new ApiError(
         403,
-        'The scheduled time window for this test has ended.',
+        'The scheduled time window for this hack has ended.',
       );
     }
     const purchaseCount = await Purchase.countDocuments({
       user: userId,
-      item_id: mock_test_id,
-      item_type: 'MockTest',
+      item_id: hack_id,
+      item_type: 'Hack',
       status: 'ACTIVE',
     });
     if (purchaseCount === 0) {
-      throw new ApiError(403, 'This is a paid test. Please purchase it first.');
+      throw new ApiError(403, 'This is a paid hack. Please purchase it first.');
     }
 
     const attemptCount = await TestAttempt.countDocuments({
       user: userId,
-      mock_test: mock_test_id,
+      hack: hack_id,
     });
 
     // If they don't have an IN_PROGRESS attempt, check if they have unused purchases
     if (!activeAttempt && attemptCount >= purchaseCount) {
       throw new ApiError(
         403,
-        'Maximum attempt limit reached. Please purchase the test again to retake it.',
+        'Maximum attempt limit reached. Please purchase the hack again to retake it.',
       );
     }
   }
@@ -67,14 +67,14 @@ export const startTest = asyncHandler(async (req, res) => {
   if (!activeAttempt) {
     activeAttempt = await TestAttempt.create({
       user: userId,
-      mock_test: mock_test_id,
+      hack: hack_id,
       started_at: new Date(),
       status: 'IN_PROGRESS',
       answers: [],
     });
 
     // Schedule BullMQ auto-submit job
-    await scheduleAutoSubmit(activeAttempt._id, mockTest.duration_minutes);
+    await scheduleAutoSubmit(activeAttempt._id, hack.duration_minutes);
   }
 
   return res
@@ -96,13 +96,11 @@ export const saveAnswer = asyncHandler(async (req, res) => {
   });
   if (!attempt) throw new ApiError(404, 'Active test attempt not found');
 
-  const mockTest = await MockTest.findById(attempt.mock_test);
+  const hack = await Hack.findById(attempt.hack);
 
   // Find the question and option
-  const question = mockTest.questions.find(
-    (q) => q._id.toString() === question_id,
-  );
-  if (!question) throw new ApiError(404, 'Question not found in this test');
+  const question = hack.questions.find((q) => q._id.toString() === question_id);
+  if (!question) throw new ApiError(404, 'Question not found in this hack');
 
   let selected_option_text = null;
   if (selected_option_id) {
@@ -195,12 +193,12 @@ export const evaluateTest = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'Test is not completed yet');
   }
 
-  const mockTest = await MockTest.findById(attempt.mock_test);
+  const hack = await Hack.findById(attempt.hack);
   let score = 0;
 
   // Calculate score
   attempt.answers.forEach((answer) => {
-    const question = mockTest.questions.find(
+    const question = hack.questions.find(
       (q) => q._id.toString() === answer.question_id.toString(),
     );
     if (question && answer.selected_option_id) {
@@ -210,14 +208,14 @@ export const evaluateTest = asyncHandler(async (req, res) => {
       if (selectedOption && selectedOption.is_correct) {
         answer.is_correct = true;
         score += question.marks;
-      } else if (mockTest.negative_marking) {
-        score -= mockTest.negative_marks_per_wrong;
+      } else if (hack.negative_marking) {
+        score -= hack.negative_marks_per_wrong;
       }
     }
   });
 
   attempt.score = Math.max(0, score);
-  attempt.percentage = (attempt.score / mockTest.total_marks) * 100;
+  attempt.percentage = (attempt.score / hack.total_marks) * 100;
 
   await attempt.save();
 
@@ -233,7 +231,7 @@ export const getMyAttempts = asyncHandler(async (req, res) => {
   const attempts = await TestAttempt.find({ user: req.user._id })
     .sort({ completed_at: -1, started_at: -1 })
     .populate({
-      path: 'mock_test',
+      path: 'hack',
       select: 'title course',
       populate: { path: 'course', select: 'title' },
     });
@@ -247,7 +245,7 @@ export const getMyAttempts = asyncHandler(async (req, res) => {
 
     return {
       ...obj,
-      test: obj.mock_test,
+      test: obj.hack,
       totalAttempted,
       correctAnswers,
     };

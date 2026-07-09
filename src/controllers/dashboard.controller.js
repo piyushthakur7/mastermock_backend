@@ -1,5 +1,5 @@
 import { Course } from '../models/course.model.js';
-import { MockTest } from '../models/mockTest.model.js';
+import { Hack } from '../models/hack.model.js';
 import { TestAttempt } from '../models/testAttempt.model.js';
 import { User } from '../models/user.model.js';
 import { Payment } from '../models/payment.model.js';
@@ -16,7 +16,7 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
     status: 'COMPLETED',
   })
     .sort({ completed_at: -1 })
-    .populate('mock_test', 'title');
+    .populate('hack', 'title');
 
   const avgScore =
     attempts.length > 0
@@ -25,7 +25,7 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
 
   const recentActivity = attempts.slice(0, 5).map((attempt) => ({
     type: 'TEST_ATTEMPT',
-    title: `Attempted: ${attempt.mock_test?.title || 'Unknown Test'}`,
+    title: `Attempted: ${attempt.hack?.title || 'Unknown Test'}`,
     date: attempt.completed_at || attempt.started_at,
   }));
 
@@ -45,12 +45,12 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
 export const getAdminDashboard = asyncHandler(async (req, res) => {
   const totalStudents = await User.countDocuments({ role: 'STUDENT' });
   const totalCourses = await Course.countDocuments({ isDeleted: false });
-  const totalTests = await MockTest.countDocuments({ isDeleted: false });
-  const totalFreeTests = await MockTest.countDocuments({
+  const totalTests = await Hack.countDocuments({ isDeleted: false });
+  const totalFreeTests = await Hack.countDocuments({
     isDeleted: false,
     access_type: 'free',
   });
-  const totalPaidTests = await MockTest.countDocuments({
+  const totalPaidTests = await Hack.countDocuments({
     isDeleted: false,
     access_type: 'paid',
   });

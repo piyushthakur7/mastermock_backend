@@ -22,9 +22,9 @@ const testAttemptSchema = new Schema(
       required: true,
       index: true,
     },
-    mock_test: {
+    hack: {
       type: Schema.Types.ObjectId,
-      ref: 'MockTest',
+      ref: 'Hack',
       required: true,
       index: true,
     },
@@ -47,9 +47,9 @@ const testAttemptSchema = new Schema(
 );
 
 // For instantly fetching a user's history for a specific test
-testAttemptSchema.index({ user: 1, mock_test: 1 });
+testAttemptSchema.index({ user: 1, hack: 1 });
 // For instantly generating Leaderboards
-testAttemptSchema.index({ mock_test: 1, score: -1, completed_at: 1 });
+testAttemptSchema.index({ hack: 1, score: -1, completed_at: 1 });
 
 testAttemptSchema.plugin(mongooseAggregatePaginate);
 export const TestAttempt = mongoose.model('TestAttempt', testAttemptSchema);

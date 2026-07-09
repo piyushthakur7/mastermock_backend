@@ -4,10 +4,10 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { redis } from '../utils/redis.js';
 import mongoose from 'mongoose';
 
-// @desc    Get leaderboard for a mock test (best score per user)
+// @desc    Get leaderboard for a hack (best score per user)
 // @route   GET /api/v1/leaderboard/:testId?limit=100&page=1
 // @access  Private/Student
-export const getMockTestLeaderboard = asyncHandler(async (req, res) => {
+export const getHackLeaderboard = asyncHandler(async (req, res) => {
   const { testId } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
   const page = parseInt(req.query.page) || 1;
@@ -32,7 +32,7 @@ export const getMockTestLeaderboard = asyncHandler(async (req, res) => {
   const leaderboard = await TestAttempt.aggregate([
     {
       $match: {
-        mock_test: new mongoose.Types.ObjectId(testId),
+        hack: new mongoose.Types.ObjectId(testId),
         status: 'COMPLETED',
       },
     },
@@ -109,7 +109,7 @@ export const getMyRank = asyncHandler(async (req, res) => {
   const userBest = await TestAttempt.aggregate([
     {
       $match: {
-        mock_test: new mongoose.Types.ObjectId(testId),
+        hack: new mongoose.Types.ObjectId(testId),
         user: new mongoose.Types.ObjectId(userId),
         status: 'COMPLETED',
       },
@@ -142,7 +142,7 @@ export const getMyRank = asyncHandler(async (req, res) => {
   const higherScoreUsers = await TestAttempt.aggregate([
     {
       $match: {
-        mock_test: new mongoose.Types.ObjectId(testId),
+        hack: new mongoose.Types.ObjectId(testId),
         status: 'COMPLETED',
       },
     },
@@ -166,7 +166,7 @@ export const getMyRank = asyncHandler(async (req, res) => {
   const totalParticipants = await TestAttempt.aggregate([
     {
       $match: {
-        mock_test: new mongoose.Types.ObjectId(testId),
+        hack: new mongoose.Types.ObjectId(testId),
         status: 'COMPLETED',
       },
     },

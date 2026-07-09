@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  getMockTestLeaderboard,
+  getHackLeaderboard,
   getMyRank,
 } from '../controllers/leaderboard.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
@@ -8,7 +8,7 @@ import { verifyJWT } from '../middlewares/auth.middleware.js';
 const router = Router();
 
 router.use(verifyJWT);
-router.get('/:testId', getMockTestLeaderboard);
+router.get('/:testId', getHackLeaderboard);
 router.get('/:testId/my-rank', getMyRank);
 
 export default router;

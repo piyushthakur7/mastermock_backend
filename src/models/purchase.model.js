@@ -18,7 +18,7 @@ const purchaseSchema = new Schema(
     item_type: {
       type: String,
       required: true,
-      enum: ['Course', 'MockTest'],
+      enum: ['Course', 'Hack'],
     },
     payment: { type: Schema.Types.ObjectId, ref: 'Payment', required: true },
     amount: { type: Number },
