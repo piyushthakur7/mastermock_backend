@@ -291,7 +291,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
 
   await user.save({ validateBeforeSave: false });
 
-  const resetUrl = `http://localhost:${env.PORT}/reset-password/${resetToken}`;
+  const resetUrl = `${env.FRONTEND_URL}/reset-password/${resetToken}`;
 
   // TODO: Send Email (Mocking for now)
   logger.info(`[MOCK EMAIL SEND] To: ${user.email} | Reset URL: ${resetUrl}`);
