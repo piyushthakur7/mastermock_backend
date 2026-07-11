@@ -10,8 +10,8 @@ import { ApiError } from './utils/ApiError.js';
 
 const app = express();
 
-// Trust proxy to ensure correct client IP for rate limiting behind reverse proxies
-app.set('trust proxy', 1);
+// Trust proxy to ensure correct client IP for rate limiting behind Hostinger's reverse proxy
+app.set('trust proxy', true);
 
 // 1. Security Headers
 app.use(helmet());
@@ -27,9 +27,7 @@ app.use(
 // 3. Request Logger
 app.use(morgan('dev'));
 
-// 4. Rate Limiting
-
-// 5. Body Parsers & Cookie Parser
+// 4. Body Parsers & Cookie Parser
 // --- MIDDLEWARES ---
 app.use(
   express.json({
