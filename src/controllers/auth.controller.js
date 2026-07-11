@@ -7,9 +7,6 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOCK_TIME_MS = 15 * 60 * 1000; // 15 mins
-
 const generateAccessAndRefreshTokens = async (userId) => {
   const user = await User.findById(userId);
   const accessToken = user.generateAccessToken();
@@ -65,36 +62,11 @@ export const loginUser = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Invalid credentials');
   }
 
-  // Check account lock
-  if (user.isLocked) {
-    throw new ApiError(
-      403,
-      'Account is temporarily locked due to too many failed attempts. Try again in 15 minutes.',
-    );
-  }
-
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    if (user.lockUntil && user.lockUntil <= Date.now()) {
-      user.loginAttempts = 1;
-      user.lockUntil = undefined;
-    } else {
-      user.loginAttempts += 1;
-    }
-
-    if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-      user.lockUntil = Date.now() + LOCK_TIME_MS;
-      logger.warn(`User Account Locked: ${user.email}`);
-    }
-    await user.save({ validateBeforeSave: false });
     throw new ApiError(401, 'Invalid credentials');
   }
-
-  // Reset lock on successful login
-  user.loginAttempts = 0;
-  user.lockUntil = undefined;
-  await user.save({ validateBeforeSave: false });
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,
@@ -132,36 +104,11 @@ export const adminLogin = asyncHandler(async (req, res) => {
     throw new ApiError(403, 'Access denied. Only admins can use this login.');
   }
 
-  // Check account lock
-  if (user.isLocked) {
-    throw new ApiError(
-      403,
-      'Account is temporarily locked due to too many failed attempts. Try again in 15 minutes.',
-    );
-  }
-
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    if (user.lockUntil && user.lockUntil <= Date.now()) {
-      user.loginAttempts = 1;
-      user.lockUntil = undefined;
-    } else {
-      user.loginAttempts += 1;
-    }
-
-    if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-      user.lockUntil = Date.now() + LOCK_TIME_MS;
-      logger.warn(`Admin Account Locked: ${user.email}`);
-    }
-    await user.save({ validateBeforeSave: false });
     throw new ApiError(401, 'Invalid credentials');
   }
-
-  // Reset lock on successful login
-  user.loginAttempts = 0;
-  user.lockUntil = undefined;
-  await user.save({ validateBeforeSave: false });
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,

@@ -18,14 +18,12 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from '../validators/auth.validator.js';
-import { authLimiter } from '../middlewares/rateLimiter.middleware.js';
-
 const router = Router();
 
-// Public Routes (auth limiter protects against brute-force)
-router.post('/register', authLimiter, validate(registerSchema), registerUser);
-router.post('/login', authLimiter, validate(loginSchema), loginUser);
-router.post('/admin-login', authLimiter, validate(loginSchema), adminLogin);
+// Public Routes
+router.post('/register', validate(registerSchema), registerUser);
+router.post('/login', validate(loginSchema), loginUser);
+router.post('/admin-login', validate(loginSchema), adminLogin);
 router.post('/refresh-token', refreshAccessToken);
 router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword);
 router.post(
