@@ -34,3 +34,27 @@ export const verifyJWT = asyncHandler(async (req, res, next) => {
     throw new ApiError(401, error?.message || 'Invalid access token');
   }
 });
+
+export const optionalVerifyJWT = asyncHandler(async (req, res, next) => {
+  try {
+    const token =
+      req.cookies?.accessToken ||
+      req.header('Authorization')?.replace('Bearer ', '');
+
+    if (!token) {
+      return next();
+    }
+
+    const decodedToken = jwt.verify(token, env.ACCESS_TOKEN_SECRET);
+    const user = await User.findById(decodedToken?._id).select(
+      '-password_hash -refresh_token',
+    );
+
+    if (user && user.status !== 'suspended') {
+      req.user = user;
+    }
+    next();
+  } catch (error) {
+    next();
+  }
+});

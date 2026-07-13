@@ -14,7 +14,10 @@ import {
   getMyPurchasedHacks,
   checkAccess,
 } from '../controllers/hack.controller.js';
-import { verifyJWT } from '../middlewares/auth.middleware.js';
+import {
+  verifyJWT,
+  optionalVerifyJWT,
+} from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/role.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import {
@@ -26,13 +29,11 @@ import {
 
 const router = Router();
 
-router.use(verifyJWT);
-
-// Student routes (specific paths BEFORE parameterized /:id)
-router.route('/').get(getHacks);
-router.route('/my/purchased').get(getMyPurchasedHacks);
-router.route('/:id').get(getHackById);
-router.route('/:id/check-access').get(checkAccess);
+// Student routes (public or optional auth)
+router.route('/').get(optionalVerifyJWT, getHacks);
+router.route('/my/purchased').get(verifyJWT, getMyPurchasedHacks);
+router.route('/:id').get(optionalVerifyJWT, getHackById);
+router.route('/:id/check-access').get(verifyJWT, checkAccess);
 
 // Admin routes
 router.use(authorizeRoles('ADMIN'));
