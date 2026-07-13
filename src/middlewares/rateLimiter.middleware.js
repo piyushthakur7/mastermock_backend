@@ -12,42 +12,11 @@ const getClientIp = (req) => {
   );
 };
 
-// Auth rate limiter — prevents brute-force login attacks
-// Only applied on login/register routes
-export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // 50 login attempts per 15 min per IP — generous for real users
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: getClientIp,
-  handler: (_, __, ___, options) => {
-    throw new ApiError(429, 'Too many login attempts, please try again later');
-  },
-});
+// Auth rate limiter (Disabled)
+export const authLimiter = (req, res, next) => next();
 
-// Payment order creation — prevents spam but allows legit retries
-export const paymentLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20, // 20 order creations per minute per IP — very generous
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: getClientIp,
-  handler: () => {
-    throw new ApiError(429, 'Too many payment requests, please wait a moment');
-  },
-});
+// Payment order creation (Disabled)
+export const paymentLimiter = (req, res, next) => next();
 
-// Payment verification — generous to handle retries and webhook races
-export const verifyLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 verify requests per minute per IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: getClientIp,
-  handler: () => {
-    throw new ApiError(
-      429,
-      'Too many verification requests, please wait a moment',
-    );
-  },
-});
+// Payment verification (Disabled)
+export const verifyLimiter = (req, res, next) => next();
