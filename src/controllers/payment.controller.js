@@ -13,14 +13,17 @@ export const createOrder = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'item_id and item_type are required');
   }
 
-  if (!['Course', 'MockTest'].includes(item_type)) {
+  if (!['Course', 'MockTest', 'Hack'].includes(item_type)) {
     throw new ApiError(400, 'item_type must be Course or MockTest');
   }
+
+  // Normalize: frontend sends "MockTest" but backend models use "Hack"
+  const normalizedItemType = item_type === 'MockTest' ? 'Hack' : item_type;
 
   const orderData = await paymentService.createOrder(
     req.user._id,
     item_id,
-    item_type,
+    normalizedItemType,
   );
 
   return res.json(new ApiResponse(200, orderData, 'Order created'));
