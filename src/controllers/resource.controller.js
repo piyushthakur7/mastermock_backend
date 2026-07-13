@@ -4,10 +4,10 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
-  uploadFileLocally,
-  deleteFileLocally,
+  uploadFileToCloudinary,
+  deleteFileFromCloudinary,
   generateSignedDownloadUrl,
-} from '../utils/fileStorage.js';
+} from '../utils/cloudinary.js';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
@@ -37,8 +37,8 @@ export const uploadResource = asyncHandler(async (req, res) => {
   const folder = course || 'standalone';
   const fileName = `resources/${folder}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
 
-  // Upload locally
-  const publicId = await uploadFileLocally(req.file.buffer, fileName);
+  // Upload to Cloudinary (using resource_type: auto to support PDFs)
+  const publicId = await uploadFileToCloudinary(req.file.buffer, fileName);
 
   const resource = await Resource.create({
     title,
@@ -65,8 +65,8 @@ export const deleteResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  // Delete from local storage
-  await deleteFileLocally(resource.file_url);
+  // Delete from Cloudinary
+  await deleteFileFromCloudinary(resource.file_url);
 
   // Hard delete from DB as it's just a file reference
   await resource.deleteOne();
@@ -134,8 +134,8 @@ export const downloadResource = asyncHandler(async (req, res) => {
 
   // All PDFs are free for logged-in users — no enrollment check needed
 
-  // Generate signed URL for local download
-  const signedUrl = await generateSignedDownloadUrl(resource.file_url, req);
+  // Generate signed URL from Cloudinary
+  const signedUrl = await generateSignedDownloadUrl(resource.file_url);
 
   return res
     .status(200)
