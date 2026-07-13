@@ -36,7 +36,7 @@ router.route('/:id').get(optionalVerifyJWT, getHackById);
 router.route('/:id/check-access').get(verifyJWT, checkAccess);
 
 // Admin routes
-router.use(authorizeRoles('ADMIN'));
+router.use(verifyJWT, authorizeRoles('ADMIN'));
 
 router.route('/').post(validate(createHackSchema), createHack);
 
