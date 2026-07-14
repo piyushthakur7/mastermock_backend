@@ -10,14 +10,30 @@ export const errorHandler = (err, req, res, next) => {
     statusCode = 400;
   }
 
+  const duration = req.startTime
+    ? (() => {
+        const diff = process.hrtime(req.startTime);
+        return (diff[0] * 1e3 + diff[1] * 1e-6).toFixed(2) + 'ms';
+      })()
+    : 'unknown';
+
+  const logPayload = {
+    correlationId: req.correlationId || 'none',
+    method: req.method,
+    url: req.originalUrl,
+    statusCode,
+    message,
+    duration,
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+    body: Object.keys(req.body || {}).length ? req.body : undefined,
+    stack: err.stack,
+  };
+
   if (env.NODE_ENV === 'development') {
-    logger.error(
-      `[${req.method}] ${req.url} >> StatusCode:: ${statusCode}, Message:: ${message}`,
-    );
+    logger.error(JSON.stringify(logPayload, null, 2));
   } else {
-    logger.error(
-      `[${req.method}] ${req.url} >> StatusCode:: ${statusCode}, Message:: ${message}`,
-    );
+    logger.error(JSON.stringify(logPayload));
   }
 
   res.status(statusCode).json({

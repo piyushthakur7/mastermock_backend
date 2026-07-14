@@ -7,8 +7,12 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { clearRateLimitKey } from '../middlewares/rateLimiter.middleware.js';
+import { redis } from '../utils/redis.js';
 
-const generateAccessAndRefreshTokens = async (userId) => {
+const generateAccessAndRefreshTokens = async (
+  userId,
+  oldRefreshToken = null,
+) => {
   const user = await User.findById(userId);
   const accessToken = user.generateAccessToken();
   const refreshToken = user.generateRefreshToken();
@@ -16,6 +20,11 @@ const generateAccessAndRefreshTokens = async (userId) => {
   // Token Rotation: Overwrite old refresh token
   user.refresh_token = refreshToken;
   await user.save({ validateBeforeSave: false });
+
+  if (oldRefreshToken && redis) {
+    const payload = JSON.stringify({ accessToken, refreshToken });
+    await redis.set(`rotated_token:${oldRefreshToken}`, payload, 'EX', 30);
+  }
 
   return { accessToken, refreshToken };
 };
@@ -176,6 +185,29 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
 
     // Detect token reuse
     if (incomingRefreshToken !== user?.refresh_token) {
+      if (redis) {
+        const cachedPayload = await redis.get(
+          `rotated_token:${incomingRefreshToken}`,
+        );
+        if (cachedPayload) {
+          logger.info(
+            `Concurrent refresh detected for user: ${user.email}. Using grace period tokens.`,
+          );
+          const { accessToken, refreshToken } = JSON.parse(cachedPayload);
+          return res
+            .status(200)
+            .cookie('accessToken', accessToken, cookieOptions)
+            .cookie('refreshToken', refreshToken, cookieOptions)
+            .json(
+              new ApiResponse(
+                200,
+                { accessToken, refreshToken },
+                'Access token refreshed (concurrent)',
+              ),
+            );
+        }
+      }
+
       // Security Breach: Token was reused! Clear all tokens.
       await User.findByIdAndUpdate(user._id, { $unset: { refresh_token: 1 } });
       logger.warn(`Refresh Token Reuse Detected for user: ${user.email}`);
@@ -186,7 +218,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
     }
 
     const { accessToken, refreshToken: newRefreshToken } =
-      await generateAccessAndRefreshTokens(user._id);
+      await generateAccessAndRefreshTokens(user._id, incomingRefreshToken);
 
     return res
       .status(200)

@@ -7,11 +7,15 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { errorHandler } from './middlewares/error.middleware.js';
 import { ApiError } from './utils/ApiError.js';
+import { correlationIdMiddleware } from './middlewares/correlation.middleware.js';
 
 const app = express();
 
 // Trust proxy to ensure correct client IP for rate limiting behind Hostinger's reverse proxy
 app.set('trust proxy', true);
+
+// 0. Correlation ID
+app.use(correlationIdMiddleware);
 
 // 1. Security Headers
 app.use(helmet());
