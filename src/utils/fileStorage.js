@@ -45,31 +45,3 @@ export const deleteFileLocally = async (fileName) => {
     throw new ApiError(500, 'Failed to delete file locally');
   }
 };
-
-/**
- * Generates a signed download URL for a local file
- * @param {string} fileName - The relative file path
- * @param {object} req - Express request object
- * @returns {Promise<string>}
- */
-export const generateSignedDownloadUrl = async (fileName, req) => {
-  try {
-    // Generate a signed token valid for 1 hour
-    const token = jwt.sign({ file: fileName }, env.ACCESS_TOKEN_SECRET, {
-      expiresIn: '1h',
-    });
-
-    // Determine protocol considering proxy servers (e.g., behind Nginx/Vercel)
-    let protocol = req.protocol;
-    if (req.headers['x-forwarded-proto']) {
-      protocol = req.headers['x-forwarded-proto'].split(',')[0].trim();
-    }
-
-    const host = req.get('host');
-
-    return `${protocol}://${host}/api/v1/resources/serve?token=${token}`;
-  } catch (error) {
-    console.error('Signed URL Generation Error:', error);
-    throw new ApiError(500, 'Failed to generate download URL');
-  }
-};

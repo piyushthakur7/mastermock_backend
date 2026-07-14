@@ -3,11 +3,8 @@ import { Course } from '../models/course.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import {
-  uploadFileLocally,
-  deleteFileLocally,
-  generateSignedDownloadUrl,
-} from '../utils/fileStorage.js';
+import { uploadFileLocally, deleteFileLocally } from '../utils/fileStorage.js';
+import { logger } from '../utils/logger.js';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
@@ -118,65 +115,132 @@ export const getCourseResources = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, resources, 'Resources fetched successfully'));
 });
 
-// @desc    Get signed download URL for a resource
+// @desc    Download a resource (PDF) directly
 // @route   GET /api/v1/resources/:id/download
-// @access  Private/Student (all PDFs are free for logged-in users)
+// @access  Private/Student
 export const downloadResource = asyncHandler(async (req, res) => {
-  const resource = await Resource.findOne({
-    _id: req.params.id,
-    isDeleted: false,
-    is_active: true,
-  });
+  if (!req.params.id || !req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'Invalid file ID',
+        userId: req.user?._id,
+        fileId: req.params.id,
+        url: req.originalUrl,
+        method: req.method,
+      }),
+    );
+    throw new ApiError(400, 'Invalid file ID');
+  }
+
+  const resource = await Resource.findById(req.params.id);
 
   if (!resource) {
-    throw new ApiError(404, 'Resource not found');
-  }
-
-  // All PDFs are free for logged-in users — no enrollment check needed
-
-  // Generate signed URL for local download
-  const signedUrl = await generateSignedDownloadUrl(resource.file_url, req);
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { downloadUrl: signedUrl },
-        'Signed URL generated successfully',
-      ),
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'Database record missing',
+        userId: req.user?._id,
+        fileId: req.params.id,
+        url: req.originalUrl,
+        method: req.method,
+      }),
     );
-});
-
-// @desc    Serve a resource file directly via token
-// @route   GET /api/v1/resources/serve?token=...
-// @access  Public (Token verified)
-export const serveResource = asyncHandler(async (req, res) => {
-  const { token } = req.query;
-
-  if (!token) {
-    throw new ApiError(400, 'Download token is required');
+    throw new ApiError(404, 'Database record missing');
   }
 
-  try {
-    const decodedToken = jwt.verify(token, env.ACCESS_TOKEN_SECRET);
-    const fileName = decodedToken.file;
-
-    if (!fileName) {
-      throw new ApiError(400, 'Invalid download token');
-    }
-
-    const fullPath = path.join(process.cwd(), 'uploads', fileName);
-
-    if (!fs.existsSync(fullPath)) {
-      throw new ApiError(404, 'File not found on server');
-    }
-
-    res.download(fullPath);
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      throw new ApiError(401, 'Download link has expired');
-    }
-    throw new ApiError(401, 'Invalid download token');
+  if (resource.isDeleted || !resource.is_active) {
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'File deleted',
+        userId: req.user?._id,
+        fileId: req.params.id,
+        url: req.originalUrl,
+        method: req.method,
+      }),
+    );
+    throw new ApiError(403, 'File deleted');
   }
+
+  if (!resource.file_url) {
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'Storage path missing',
+        userId: req.user?._id,
+        fileId: req.params.id,
+        url: req.originalUrl,
+        method: req.method,
+      }),
+    );
+    throw new ApiError(404, 'Storage path missing');
+  }
+
+  const fullPath = path.join(process.cwd(), 'uploads', resource.file_url);
+
+  if (!fs.existsSync(fullPath)) {
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'File not found',
+        userId: req.user?._id,
+        fileId: resource._id,
+        storagePath: resource.file_url,
+        url: req.originalUrl,
+        method: req.method,
+      }),
+    );
+    throw new ApiError(404, 'File not found');
+  }
+
+  // Set headers for download
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${resource.title}.pdf"`,
+  );
+  res.setHeader('Content-Type', 'application/pdf');
+
+  // Track download duration
+  const startTime = process.hrtime();
+
+  res.on('finish', () => {
+    const diff = process.hrtime(startTime);
+    const duration = (diff[0] * 1e3 + diff[1] * 1e-6).toFixed(2) + 'ms';
+
+    logger.info(
+      JSON.stringify({
+        event: 'DOWNLOAD_COMPLETE',
+        correlationId: req.correlationId || 'none',
+        userId: req.user._id,
+        fileId: resource._id,
+        fileName: resource.title,
+        storagePath: resource.file_url,
+        url: req.originalUrl,
+        method: req.method,
+        statusCode: res.statusCode,
+        fileExists: true,
+        duration,
+      }),
+    );
+  });
+
+  res.on('error', (err) => {
+    logger.error(
+      JSON.stringify({
+        event: 'DOWNLOAD_FAILED',
+        reason: 'Stream error',
+        userId: req.user?._id,
+        fileId: resource._id,
+        storagePath: resource.file_url,
+        url: req.originalUrl,
+        method: req.method,
+        errorStack: err.stack,
+      }),
+    );
+  });
+
+  // Stream directly to response
+  const fileStream = fs.createReadStream(fullPath);
+  fileStream.pipe(res);
 });

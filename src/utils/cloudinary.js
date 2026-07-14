@@ -3,7 +3,11 @@ import { env } from '../config/env.js';
 import { ApiError } from './ApiError.js';
 
 // Configure Cloudinary
-if (env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET) {
+if (
+  env.CLOUDINARY_CLOUD_NAME &&
+  env.CLOUDINARY_API_KEY &&
+  env.CLOUDINARY_API_SECRET
+) {
   cloudinary.config({
     cloud_name: env.CLOUDINARY_CLOUD_NAME,
     api_key: env.CLOUDINARY_API_KEY,
@@ -21,7 +25,11 @@ if (env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SE
  */
 export const uploadFileToCloudinary = async (fileBuffer, fileName) => {
   try {
-    if (!env.CLOUDINARY_CLOUD_NAME || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
+    if (
+      !env.CLOUDINARY_CLOUD_NAME ||
+      !env.CLOUDINARY_API_KEY ||
+      !env.CLOUDINARY_API_SECRET
+    ) {
       console.warn('Cloudinary not configured. Mocking upload.');
       return `mock_cloudinary_id_${Date.now()}_${fileName}`;
     }
@@ -36,10 +44,12 @@ export const uploadFileToCloudinary = async (fileBuffer, fileName) => {
         (error, result) => {
           if (error) {
             console.error('Cloudinary Upload Error:', error);
-            return reject(new ApiError(500, 'Failed to upload file to Cloudinary'));
+            return reject(
+              new ApiError(500, 'Failed to upload file to Cloudinary'),
+            );
           }
           resolve(result.public_id);
-        }
+        },
       );
 
       uploadStream.end(fileBuffer);
@@ -67,41 +77,14 @@ export const deleteFileFromCloudinary = async (publicId) => {
       return;
     }
 
-    const result = await cloudinary.uploader.destroy(publicId, { type: 'authenticated' });
+    const result = await cloudinary.uploader.destroy(publicId, {
+      type: 'authenticated',
+    });
     if (result.result !== 'ok' && result.result !== 'not found') {
       console.warn('Cloudinary Delete Warning:', result);
     }
   } catch (error) {
     console.error('Cloudinary Delete Error:', error);
     throw new ApiError(500, 'Failed to delete file from Cloudinary');
-  }
-};
-
-/**
- * Generates a signed download URL for a private Cloudinary resource
- * @param {string} publicId - The Cloudinary public_id
- * @returns {Promise<string>}
- */
-export const generateSignedDownloadUrl = async (publicId) => {
-  try {
-    if (
-      !env.CLOUDINARY_CLOUD_NAME ||
-      !env.CLOUDINARY_API_KEY ||
-      !env.CLOUDINARY_API_SECRET ||
-      publicId.startsWith('mock_cloudinary_id_')
-    ) {
-      return `https://mock-cloudinary-url.com/download/${publicId}`;
-    }
-
-    // Generate a signed URL valid for 1 hour
-    const url = cloudinary.utils.private_download_url(publicId, 'auto', {
-      expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
-      type: 'authenticated'
-    });
-
-    return url;
-  } catch (error) {
-    console.error('Cloudinary Presign Error:', error);
-    throw new ApiError(500, 'Failed to generate download URL');
   }
 };

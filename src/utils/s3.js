@@ -67,28 +67,3 @@ export const deleteFileFromS3 = async (fileKey) => {
     throw new ApiError(500, 'Failed to delete file from S3');
   }
 };
-
-export const generateSignedDownloadUrl = async (fileKey) => {
-  try {
-    if (
-      !s3Client ||
-      !env.AWS_S3_BUCKET_NAME ||
-      fileKey.startsWith('mock_s3_key_')
-    ) {
-      return `https://mock-s3-url.com/download/${fileKey}`;
-    }
-
-    const command = new GetObjectCommand({
-      Bucket: env.AWS_S3_BUCKET_NAME,
-      Key: fileKey,
-    });
-
-    const signedUrl = await getSignedUrl(s3Client, command, {
-      expiresIn: 3600,
-    });
-    return signedUrl;
-  } catch (error) {
-    console.error('S3 Presign Error:', error);
-    throw new ApiError(500, 'Failed to generate signed URL');
-  }
-};
