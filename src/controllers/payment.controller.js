@@ -98,3 +98,16 @@ export const getMyHistory = asyncHandler(async (req, res) => {
       new ApiResponse(200, payments, 'Payment history fetched successfully'),
     );
 });
+
+// @desc    Get all purchases (Admin only)
+// @route   GET /api/v1/payments/purchases
+// @access  Private/Admin
+export const getAllPurchases = asyncHandler(async (req, res) => {
+  const purchases = await paymentService.getAllPurchases();
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, purchases, 'All purchases fetched successfully'),
+    );
+});

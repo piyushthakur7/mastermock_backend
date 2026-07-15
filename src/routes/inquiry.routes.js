@@ -43,7 +43,7 @@ router.get(
   }),
 );
 
-router.patch(
+router.post(
   '/:id/reply',
   authorizeRoles('ADMIN'),
   asyncHandler(async (req, res) => {

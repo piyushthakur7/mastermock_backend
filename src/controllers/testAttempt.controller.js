@@ -261,3 +261,46 @@ export const getMyAttempts = asyncHandler(async (req, res) => {
       ),
     );
 });
+
+// @desc    Get all attempts (Admin only)
+// @route   GET /api/v1/attempts
+// @access  Private/Admin
+export const getAllAttempts = asyncHandler(async (req, res) => {
+  const attempts = await TestAttempt.find()
+    .sort({ started_at: -1 })
+    .populate({
+      path: 'user',
+      select: 'full_name email',
+    })
+    .populate({
+      path: 'hack',
+      select: 'title course duration_minutes total_marks',
+      populate: { path: 'course', select: 'title' },
+    });
+
+  const formattedAttempts = attempts.map((att) => {
+    const obj = att.toObject();
+    const totalAttempted = obj.answers ? obj.answers.length : 0;
+    const correctAnswers = obj.answers
+      ? obj.answers.filter((a) => a.is_correct).length
+      : 0;
+
+    return {
+      ...obj,
+      test: obj.hack,
+      student: obj.user,
+      totalAttempted,
+      correctAnswers,
+    };
+  });
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { data: formattedAttempts },
+        'All attempts fetched successfully',
+      ),
+    );
+});

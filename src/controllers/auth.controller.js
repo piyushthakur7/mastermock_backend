@@ -204,6 +204,13 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
         }
       }
 
+      if (!redis) {
+        logger.warn(
+          `Refresh Token Mismatch (No Redis) for user: ${user.email}, IP: ${req.ip || 'unknown'}, User-Agent: ${req.headers['user-agent'] || 'unknown'}`,
+        );
+        throw new ApiError(401, 'Refresh token mismatch. Please try again.');
+      }
+
       // Security Breach: Token was reused! Clear all tokens.
       await User.findByIdAndUpdate(user._id, { $unset: { refresh_token: 1 } });
       logger.warn(`Refresh Token Reuse Detected for user: ${user.email}`);

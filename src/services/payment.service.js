@@ -420,3 +420,13 @@ export const getMyPurchases = async (userId) => {
 export const getMyHistory = async (userId) => {
   return Payment.find({ user: userId }).sort({ createdAt: -1 });
 };
+
+// ═══════════════════════════════════════════════════════════════════════
+// 6. GET ALL PURCHASES (Admin)
+// ═══════════════════════════════════════════════════════════════════════
+export const getAllPurchases = async () => {
+  return Purchase.find()
+    .populate('user', 'full_name email')
+    .populate('item_id')
+    .sort({ createdAt: -1 });
+};
