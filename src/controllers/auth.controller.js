@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
-import { clearRateLimitKey } from '../middlewares/rateLimiter.middleware.js';
+
 import { redis } from '../utils/redis.js';
 
 const generateAccessAndRefreshTokens = async (
@@ -82,8 +82,6 @@ export const loginUser = asyncHandler(async (req, res) => {
     user._id,
   );
 
-  await clearRateLimitKey(req, 'login');
-
   const loggedInUser = await User.findById(user._id).select(
     '-password_hash -refresh_token',
   );
@@ -126,8 +124,6 @@ export const adminLogin = asyncHandler(async (req, res) => {
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,
   );
-
-  await clearRateLimitKey(req, 'admin-login');
 
   const loggedInUser = await User.findById(user._id).select(
     '-password_hash -refresh_token',
