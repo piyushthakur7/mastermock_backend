@@ -124,51 +124,18 @@ export const createOrder = async (userId, itemId, itemType) => {
   const amount = item.price;
 
   // Check if already purchased
-  if (itemType === 'Hack') {
-    const purchaseCount = await Purchase.countDocuments({
-      user: userId,
-      item_id: itemId,
-      item_type: itemType,
-      status: 'ACTIVE',
-    });
+  const existingPurchase = await Purchase.findOne({
+    user: userId,
+    item_id: itemId,
+    item_type: itemType,
+    status: 'ACTIVE',
+  });
 
-    if (purchaseCount > 0) {
-      const attemptCount = await TestAttempt.countDocuments({
-        user: userId,
-        hack: itemId,
-      });
-
-      const activeAttempt = await TestAttempt.findOne({
-        user: userId,
-        hack: itemId,
-        status: 'IN_PROGRESS',
-      });
-
-      if (activeAttempt) {
-        throw new ApiError(
-          400,
-          'You are currently taking this hack. Please finish it first.',
-        );
-      }
-
-      if (purchaseCount > attemptCount) {
-        throw new ApiError(
-          400,
-          'You already have an unused purchase for this hack. Please use it first.',
-        );
-      }
-    }
-  } else {
-    const existingPurchase = await Purchase.findOne({
-      user: userId,
-      item_id: itemId,
-      item_type: itemType,
-      status: 'ACTIVE',
-    });
-
-    if (existingPurchase) {
-      throw new ApiError(400, 'You have already purchased this item');
-    }
+  if (existingPurchase) {
+    throw new ApiError(
+      400,
+      'You have already purchased this item. Paid mock tests can only be attempted once.',
+    );
   }
 
   // Idempotency: check for a recent PENDING payment for the same user+item

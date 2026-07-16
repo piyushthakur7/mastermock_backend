@@ -55,11 +55,11 @@ export const startTest = asyncHandler(async (req, res) => {
       hack: hack_id,
     });
 
-    // If they don't have an IN_PROGRESS attempt, check if they have unused purchases
-    if (!activeAttempt && attemptCount >= purchaseCount) {
+    // If they don't have an IN_PROGRESS attempt, check if they have already attempted it
+    if (!activeAttempt && attemptCount >= 1) {
       throw new ApiError(
         403,
-        'Maximum attempt limit reached. Please purchase the hack again to retake it.',
+        'This paid test has already been attempted. Only one attempt is allowed.',
       );
     }
   }

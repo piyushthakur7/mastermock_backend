@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Hack } from '../models/hack.model.js';
 import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
@@ -239,10 +240,25 @@ export const checkAccess = asyncHandler(async (req, res) => {
       item_type: 'Hack',
       status: 'ACTIVE',
     });
-    hasAccess = !!purchase;
-    reason = hasAccess
-      ? 'Paid hack — purchase verified'
-      : 'Paid hack — purchase required';
+
+    if (purchase) {
+      const attemptCount = await mongoose.model('TestAttempt').countDocuments({
+        user: req.user._id,
+        hack: hack._id,
+      });
+
+      if (attemptCount >= 1) {
+        hasAccess = false;
+        reason = 'Paid test already attempted (One-time attempt only)';
+        var attempt_exhausted = true;
+      } else {
+        hasAccess = true;
+        reason = 'Paid hack — purchase verified';
+      }
+    } else {
+      hasAccess = false;
+      reason = 'Paid hack — purchase required';
+    }
   }
 
   return res.status(200).json(
@@ -253,6 +269,8 @@ export const checkAccess = asyncHandler(async (req, res) => {
         access_type: hack.access_type,
         price: hack.price,
         reason,
+        attempt_exhausted:
+          typeof attempt_exhausted !== 'undefined' ? attempt_exhausted : false,
       },
       'Access check completed',
     ),
