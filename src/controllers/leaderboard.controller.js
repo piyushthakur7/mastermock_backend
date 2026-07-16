@@ -13,18 +13,26 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const skip = (page - 1) * limit;
 
-  // Redis logic to cache
+  if (!mongoose.Types.ObjectId.isValid(testId)) {
+    return res.status(400).json(new ApiResponse(400, null, 'Invalid test ID'));
+  }
+
+  // Redis logic to cache (safely wrapped)
   const cacheKey = `leaderboard:${testId}:${page}:${limit}`;
   if (redis) {
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      return res.json(
-        new ApiResponse(
-          200,
-          JSON.parse(cached),
-          'Leaderboard fetched from cache',
-        ),
-      );
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        return res.json(
+          new ApiResponse(
+            200,
+            JSON.parse(cached),
+            'Leaderboard fetched from cache',
+          ),
+        );
+      }
+    } catch (err) {
+      console.warn('Redis get error:', err.message);
     }
   }
 
@@ -46,6 +54,15 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
       },
     },
     { $sort: { best_score: -1, last_attempt_at: 1 } },
+    {
+      $lookup: {
+        from: 'users',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'user',
+      },
+    },
+    { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
   ]);
 
   const totalParticipants = leaderboard.length;
@@ -59,17 +76,17 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
   // Paginate in memory
   let entries = rankedLeaderboard.slice(skip, skip + limit);
 
-  // Populate user info
-  await TestAttempt.populate(entries, {
-    path: '_id',
-    model: 'User',
-    select: 'full_name email profile_picture',
-  });
-
   // Reshape the entries for cleaner output
   entries = entries.map((entry) => ({
     rank: entry.rank,
-    user: entry._id,
+    user: entry.user
+      ? {
+          _id: entry.user._id,
+          full_name: entry.user.full_name,
+          email: entry.user.email,
+          profile_picture: entry.user.profile_picture,
+        }
+      : null,
     best_score: entry.best_score,
     best_percentage: entry.best_percentage,
     total_attempts: entry.total_attempts,
@@ -85,7 +102,11 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
   };
 
   if (redis) {
-    await redis.set(cacheKey, JSON.stringify(result), 'EX', 300); // 5 minutes cache
+    try {
+      await redis.set(cacheKey, JSON.stringify(result), 'EX', 300); // 5 minutes cache
+    } catch (err) {
+      console.warn('Redis set error:', err.message);
+    }
   }
 
   res.json(new ApiResponse(200, result, 'Leaderboard fetched'));
