@@ -28,7 +28,7 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
     }
   }
 
-  // Aggregate: group by user, take best score per user, then rank
+  // Aggregate: group by user, take best score per user
   const leaderboard = await TestAttempt.aggregate([
     {
       $match: {
@@ -46,25 +46,18 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
       },
     },
     { $sort: { best_score: -1, last_attempt_at: 1 } },
-    {
-      $setWindowFields: {
-        sortBy: { best_score: -1, last_attempt_at: 1 },
-        output: {
-          rank: { $rank: {} },
-        },
-      },
-    },
-    {
-      $facet: {
-        metadata: [{ $count: 'total_participants' }],
-        entries: [{ $skip: skip }, { $limit: limit }],
-      },
-    },
   ]);
 
-  const totalParticipants =
-    leaderboard[0]?.metadata[0]?.total_participants || 0;
-  let entries = leaderboard[0]?.entries || [];
+  const totalParticipants = leaderboard.length;
+
+  // Assign rank based on index in memory
+  const rankedLeaderboard = leaderboard.map((entry, index) => ({
+    ...entry,
+    rank: index + 1,
+  }));
+
+  // Paginate in memory
+  let entries = rankedLeaderboard.slice(skip, skip + limit);
 
   // Populate user info
   await TestAttempt.populate(entries, {
@@ -88,7 +81,7 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
     total_participants: totalParticipants,
     page,
     limit,
-    total_pages: Math.ceil(totalParticipants / limit),
+    total_pages: Math.ceil(totalParticipants / limit) || 1,
   };
 
   if (redis) {
