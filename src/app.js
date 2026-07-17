@@ -11,8 +11,10 @@ import { correlationIdMiddleware } from './middlewares/correlation.middleware.js
 
 const app = express();
 
-// Trust proxy to ensure correct client IP for rate limiting behind Hostinger's reverse proxy
-app.set('trust proxy', true);
+// Trust exactly ONE proxy hop (Hostinger's reverse proxy) so req.ip is the
+// real client IP. Using `true` trusts every hop and lets clients spoof
+// X-Forwarded-For — and can collapse many users onto one IP bucket.
+app.set('trust proxy', 1);
 
 // 0. Correlation ID
 app.use(correlationIdMiddleware);
