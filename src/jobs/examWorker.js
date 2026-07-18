@@ -1,53 +1,40 @@
-import { redis } from '../utils/redis.js';
 import { TestAttempt } from '../models/testAttempt.model.js';
 
-export const setupExamWorker = async () => {
-  if (!redis) {
-    console.warn('Redis not configured. Exam Worker not started.');
-    return;
-  }
+const SWEEP_INTERVAL_MS = 60 * 1000;
 
-  // Prevent starting persistent worker in Serverless environments like Vercel
+/**
+ * Auto-submit expired attempts without any external queue.
+ *
+ * Every attempt stores a hard deadline in `expires_at` when it starts.
+ * This sweeper runs once a minute and completes any IN_PROGRESS attempt
+ * whose deadline has passed. Because the deadline lives in the database,
+ * expired attempts survive server restarts (unlike an in-process timer)
+ * and controllers can also enforce it lazily on access.
+ */
+export const setupExamWorker = () => {
+  // Serverless platforms kill idle processes, so an interval can't be
+  // relied on there — controllers still enforce expiry lazily on access.
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION) {
     console.warn(
-      'Running in a serverless environment (Vercel/Lambda). Exam Worker disabled to prevent 503 timeouts.',
+      'Serverless environment detected. Auto-submit sweeper disabled; attempt expiry is enforced on access.',
     );
     return;
   }
 
-  try {
-    const { Worker } = await import('bullmq');
+  const sweep = async () => {
+    try {
+      const result = await TestAttempt.updateMany(
+        { status: 'IN_PROGRESS', expires_at: { $lte: new Date() } },
+        [{ $set: { status: 'COMPLETED', completed_at: '$expires_at' } }],
+      );
+      if (result.modifiedCount > 0) {
+        console.log(`Auto-submitted ${result.modifiedCount} expired attempt(s)`);
+      }
+    } catch (err) {
+      console.error('Auto-submit sweep failed:', err.message);
+    }
+  };
 
-    const worker = new Worker(
-      'exam-autosubmit',
-      async (job) => {
-        const { attemptId } = job.data;
-
-        const attempt = await TestAttempt.findById(attemptId);
-
-        if (attempt && attempt.status === 'IN_PROGRESS') {
-          attempt.status = 'COMPLETED';
-          attempt.completed_at = new Date();
-
-          // Evaluation is deferred to the results phase or another job
-
-          await attempt.save();
-          console.log(`Auto-submitted attempt ${attemptId}`);
-        }
-      },
-      { connection: redis },
-    );
-
-    worker.on('failed', (job, err) => {
-      console.error(`Job ${job.id} failed with error ${err.message}`);
-    });
-
-    worker.on('error', (err) => {
-      console.error(`Worker encountered an error: ${err.message}`);
-    });
-
-    console.log('Exam Auto-Submit Worker started');
-  } catch (err) {
-    console.error('Failed to start Exam Worker:', err.message);
-  }
+  setInterval(sweep, SWEEP_INTERVAL_MS);
+  console.log('Exam auto-submit sweeper started');
 };

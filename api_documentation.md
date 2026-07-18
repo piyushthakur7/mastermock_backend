@@ -1336,7 +1336,7 @@ Base Path: `/api/v1/attempts`
 
 🔒 **Auth Required**
 
-**Description:** Start a new test attempt. If an `IN_PROGRESS` attempt already exists for the same test, it will be returned instead of creating a new one. A **BullMQ auto-submit job** is scheduled to automatically submit the test when the duration expires.
+**Description:** Start a new test attempt. If an `IN_PROGRESS` attempt already exists for the same test, it will be returned instead of creating a new one. The attempt stores an `expires_at` deadline and is **auto-submitted** by a background sweep when the duration expires.
 
 **Request Body (JSON):**
 
@@ -1447,7 +1447,7 @@ Base Path: `/api/v1/attempts`
 }
 ```
 
-> ⚠️ Tests are also **auto-submitted** when the duration expires (via background BullMQ job).
+> ⚠️ Tests are also **auto-submitted** when the duration expires (via a background sweep of the `expires_at` deadline).
 
 ---
 
@@ -1754,7 +1754,7 @@ Base Path: `/api/v1/leaderboard`
 
 🔒 **Auth Required**
 
-**Description:** Get the top 10 leaderboard for a specific mock test. Sorted by highest score, then earliest completion. Results are **cached in Redis for 5 minutes**.
+**Description:** Get the top 10 leaderboard for a specific mock test. Sorted by highest score, then earliest completion.
 
 **URL Params:**
 

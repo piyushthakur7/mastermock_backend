@@ -4,7 +4,24 @@ import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { scheduleAutoSubmit } from '../jobs/examQueue.js';
+
+// Lazily enforce the attempt deadline: the background sweeper completes
+// expired attempts once a minute, but a request can land in between (or the
+// sweeper may be disabled on serverless), so controllers finalize on access.
+const finalizeIfExpired = async (attempt) => {
+  if (
+    attempt &&
+    attempt.status === 'IN_PROGRESS' &&
+    attempt.expires_at &&
+    attempt.expires_at <= new Date()
+  ) {
+    attempt.status = 'COMPLETED';
+    attempt.completed_at = attempt.expires_at;
+    await attempt.save();
+    return true;
+  }
+  return false;
+};
 
 // @desc    Start a test attempt
 // @route   POST /api/v1/attempts/start
@@ -65,16 +82,8 @@ export const startTest = asyncHandler(async (req, res) => {
   }
 
   if (!activeAttempt) {
-    activeAttempt = await TestAttempt.create({
-      user: userId,
-      hack: hack_id,
-      started_at: new Date(),
-      status: 'IN_PROGRESS',
-      answers: [],
-    });
-
-    // Schedule BullMQ auto-submit job. If the test has a scheduled end_time,
-    // clamp the attempt to it — a student starting late gets only the time
+    // Deadline for auto-submit. If the test has a scheduled end_time, clamp
+    // the attempt to it — a student starting late gets only the time
     // remaining in the window, so no attempt runs past the window close.
     let effectiveMinutes = hack.duration_minutes;
     if (hack.end_time) {
@@ -85,7 +94,15 @@ export const startTest = asyncHandler(async (req, res) => {
         Math.min(hack.duration_minutes, Math.ceil(minutesUntilClose)),
       );
     }
-    await scheduleAutoSubmit(activeAttempt._id, effectiveMinutes);
+
+    activeAttempt = await TestAttempt.create({
+      user: userId,
+      hack: hack_id,
+      started_at: new Date(),
+      expires_at: new Date(Date.now() + effectiveMinutes * 60 * 1000),
+      status: 'IN_PROGRESS',
+      answers: [],
+    });
   }
 
   return res
@@ -106,6 +123,10 @@ export const saveAnswer = asyncHandler(async (req, res) => {
     status: 'IN_PROGRESS',
   });
   if (!attempt) throw new ApiError(404, 'Active test attempt not found');
+
+  if (await finalizeIfExpired(attempt)) {
+    throw new ApiError(400, 'Time is up. The test has been auto-submitted.');
+  }
 
   const hack = await Hack.findById(attempt.hack);
 
@@ -186,6 +207,8 @@ export const getAttempt = asyncHandler(async (req, res) => {
     user: req.user._id,
   });
   if (!attempt) throw new ApiError(404, 'Attempt not found');
+
+  await finalizeIfExpired(attempt);
 
   return res.status(200).json(new ApiResponse(200, attempt, 'Attempt fetched'));
 });

@@ -7,25 +7,15 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
-import { redis } from '../utils/redis.js';
 import { clearRateLimitKey } from '../middlewares/rateLimiter.middleware.js';
 
-const generateAccessAndRefreshTokens = async (
-  userId,
-  oldRefreshToken = null,
-) => {
+const generateAccessAndRefreshTokens = async (userId) => {
   const user = await User.findById(userId);
   const accessToken = user.generateAccessToken();
   const refreshToken = user.generateRefreshToken();
 
-  // Token Rotation: Overwrite old refresh token
   user.refresh_token = refreshToken;
   await user.save({ validateBeforeSave: false });
-
-  if (oldRefreshToken && redis) {
-    const payload = JSON.stringify({ accessToken, refreshToken });
-    await redis.set(`rotated_token:${oldRefreshToken}`, payload, 'EX', 30);
-  }
 
   return { accessToken, refreshToken };
 };
@@ -167,6 +157,12 @@ export const logoutUser = asyncHandler(async (req, res) => {
 
 // @desc    Refresh Access Token
 // @route   POST /api/v1/auth/refresh-token
+//
+// The refresh token is NOT rotated here. Rotation-per-refresh caused a race:
+// rapid navigation fires several 401'd requests at once, each hitting this
+// endpoint concurrently — the first rotates the token and the rest arrive
+// with the now-stale one, which used to be treated as token theft and force
+// a logout. The token stays valid until it expires or the user logs out.
 export const refreshAccessToken = asyncHandler(async (req, res) => {
   const incomingRefreshToken =
     req.cookies.refreshToken || req.body.refreshToken;
@@ -182,62 +178,22 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
     );
     const user = await User.findById(decodedToken?._id);
 
-    if (!user) {
-      throw new ApiError(401, 'Invalid refresh token');
-    }
-
-    // Detect token reuse
-    if (incomingRefreshToken !== user?.refresh_token) {
-      if (redis) {
-        const cachedPayload = await redis.get(
-          `rotated_token:${incomingRefreshToken}`,
-        );
-        if (cachedPayload) {
-          logger.info(
-            `Concurrent refresh detected for user: ${user.email}. Using grace period tokens.`,
-          );
-          const { accessToken, refreshToken } = JSON.parse(cachedPayload);
-          return res
-            .status(200)
-            .cookie('accessToken', accessToken, cookieOptions)
-            .cookie('refreshToken', refreshToken, cookieOptions)
-            .json(
-              new ApiResponse(
-                200,
-                { accessToken, refreshToken },
-                'Access token refreshed (concurrent)',
-              ),
-            );
-        }
-      }
-
-      if (!redis) {
-        logger.warn(
-          `Refresh Token Mismatch (No Redis) for user: ${user.email}, IP: ${req.ip || 'unknown'}, User-Agent: ${req.headers['user-agent'] || 'unknown'}`,
-        );
-        throw new ApiError(401, 'Refresh token mismatch. Please try again.');
-      }
-
-      // Security Breach: Token was reused! Clear all tokens.
-      await User.findByIdAndUpdate(user._id, { $unset: { refresh_token: 1 } });
-      logger.warn(`Refresh Token Reuse Detected for user: ${user.email}`);
-      throw new ApiError(
-        401,
-        'Refresh token is expired or used. Please login again.',
+    if (!user || incomingRefreshToken !== user.refresh_token) {
+      logger.warn(
+        `Refresh token mismatch for user: ${user?.email || decodedToken?._id}, IP: ${req.ip || 'unknown'}`,
       );
+      throw new ApiError(401, 'Invalid refresh token. Please login again.');
     }
 
-    const { accessToken, refreshToken: newRefreshToken } =
-      await generateAccessAndRefreshTokens(user._id, incomingRefreshToken);
+    const accessToken = user.generateAccessToken();
 
     return res
       .status(200)
       .cookie('accessToken', accessToken, cookieOptions)
-      .cookie('refreshToken', newRefreshToken, cookieOptions)
       .json(
         new ApiResponse(
           200,
-          { accessToken, refreshToken: newRefreshToken },
+          { accessToken, refreshToken: incomingRefreshToken },
           'Access token refreshed',
         ),
       );

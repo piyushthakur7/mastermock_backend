@@ -29,6 +29,9 @@ const testAttemptSchema = new Schema(
       index: true,
     },
     started_at: { type: Date, default: Date.now },
+    // Hard deadline for the attempt; the auto-submit sweeper completes any
+    // IN_PROGRESS attempt past this time.
+    expires_at: { type: Date, index: true },
     completed_at: { type: Date },
     status: {
       type: String,

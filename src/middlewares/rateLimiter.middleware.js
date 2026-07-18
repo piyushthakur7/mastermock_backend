@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import { ApiError } from '../utils/ApiError.js';
 import { logger } from '../utils/logger.js';
-import { redis } from '../utils/redis.js';
 
 /**
  * Rate limiting for authentication endpoints ONLY.
@@ -13,9 +12,8 @@ import { redis } from '../utils/redis.js';
  * a single bucket). These limiters guard brute-force on auth routes only and
  * are keyed by IP + email so normal traffic is never affected.
  *
- * Backing store: Redis when configured, otherwise an in-process Map. The
- * in-memory store is per-process and resets on restart — acceptable for
- * brute-force mitigation on a single instance.
+ * Backing store: an in-process Map. Per-process and resets on restart —
+ * acceptable for brute-force mitigation on a single instance.
  */
 
 const memoryStore = new Map();
@@ -62,17 +60,8 @@ const handleMemoryLimit = (key, windowMs) => {
  * Clear a rate-limit counter. Called after a successful login so a user who
  * mistyped their password a few times is not penalised once they get in.
  */
-export const clearRateLimitKey = async (req, prefix = 'login') => {
-  const key = buildKey(prefix, req);
-  try {
-    if (redis) {
-      await redis.del(key);
-    } else {
-      memoryStore.delete(key);
-    }
-  } catch (error) {
-    logger.error(`Error clearing rate limit key ${key}:`, error);
-  }
+export const clearRateLimitKey = (req, prefix = 'login') => {
+  memoryStore.delete(buildKey(prefix, req));
 };
 
 export const createRateLimiter = ({
@@ -81,40 +70,12 @@ export const createRateLimiter = ({
   windowMs = 15 * 60 * 1000,
   message = 'Too many requests. Please wait a while before trying again.',
 }) => {
-  const windowSeconds = Math.max(1, Math.floor(windowMs / 1000));
-
-  return async (req, res, next) => {
+  return (req, res, next) => {
     try {
       const key = buildKey(prefix, req);
-      let attempts = 0;
-      let ttlSeconds = windowSeconds;
 
-      if (redis) {
-        try {
-          const multi = redis.multi();
-          multi.incr(key);
-          multi.expire(key, windowSeconds, 'NX');
-          const results = await multi.exec();
-
-          attempts = results?.[0]?.[1] ?? Number(await redis.get(key)) ?? 0;
-
-          const ttl = await redis.ttl(key);
-          if (ttl > 0) ttlSeconds = ttl;
-        } catch (redisError) {
-          logger.error(
-            'Redis rate limiter error, falling back to memory:',
-            redisError,
-          );
-          const mem = handleMemoryLimit(key, windowMs);
-          attempts = mem.attempts;
-          ttlSeconds = mem.ttlSeconds;
-        }
-      } else {
-        if (memoryStore.size > 5000) sweepMemoryStore();
-        const mem = handleMemoryLimit(key, windowMs);
-        attempts = mem.attempts;
-        ttlSeconds = mem.ttlSeconds;
-      }
+      if (memoryStore.size > 5000) sweepMemoryStore();
+      const { attempts, ttlSeconds } = handleMemoryLimit(key, windowMs);
 
       res.setHeader('RateLimit-Limit', maxAttempts);
       res.setHeader('RateLimit-Remaining', Math.max(0, maxAttempts - attempts));
