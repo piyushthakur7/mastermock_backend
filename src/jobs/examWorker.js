@@ -28,13 +28,19 @@ export const setupExamWorker = () => {
         [{ $set: { status: 'COMPLETED', completed_at: '$expires_at' } }],
       );
       if (result.modifiedCount > 0) {
-        console.log(`Auto-submitted ${result.modifiedCount} expired attempt(s)`);
+        console.log(
+          `Auto-submitted ${result.modifiedCount} expired attempt(s)`,
+        );
       }
     } catch (err) {
       console.error('Auto-submit sweep failed:', err.message);
     }
   };
 
-  setInterval(sweep, SWEEP_INTERVAL_MS);
+  // unref so a pending sweep never keeps the process alive on its own —
+  // otherwise the node process (and any test run) refuses to exit.
+  const timer = setInterval(sweep, SWEEP_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
   console.log('Exam auto-submit sweeper started');
+  return timer;
 };

@@ -104,15 +104,18 @@ export const adminLogin = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Invalid credentials');
   }
 
-  // Enforce Admin Role
-  if (user.role !== 'ADMIN') {
-    throw new ApiError(403, 'Access denied. Only admins can use this login.');
-  }
-
+  // Password first, role second. Checking the role first let anyone probe this
+  // endpoint to find out which addresses are admin accounts without ever
+  // knowing a password.
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
     throw new ApiError(401, 'Invalid credentials');
+  }
+
+  // Enforce Admin Role
+  if (user.role !== 'ADMIN') {
+    throw new ApiError(403, 'Access denied. Only admins can use this login.');
   }
 
   // Successful login — reset the brute-force counter for this IP + email.
@@ -228,25 +231,27 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email });
 
-  if (!user) {
-    throw new ApiError(404, 'User with this email does not exist');
+  // Always answer the same way. A 404 for unknown addresses turned this
+  // endpoint into a free "is this person registered?" oracle.
+  if (user) {
+    const resetToken = crypto.randomBytes(20).toString('hex');
+
+    // Hash token to save in DB securely
+    user.resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 mins
+
+    await user.save({ validateBeforeSave: false });
+
+    const resetUrl = `${env.FRONTEND_URL}/reset-password/${resetToken}`;
+
+    // TODO: Send Email (Mocking for now)
+    logger.info(`[MOCK EMAIL SEND] To: ${user.email} | Reset URL: ${resetUrl}`);
+  } else {
+    logger.info(`Password reset requested for unregistered email: ${email}`);
   }
-
-  const resetToken = crypto.randomBytes(20).toString('hex');
-
-  // Hash token to save in DB securely
-  user.resetPasswordToken = crypto
-    .createHash('sha256')
-    .update(resetToken)
-    .digest('hex');
-  user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 mins
-
-  await user.save({ validateBeforeSave: false });
-
-  const resetUrl = `${env.FRONTEND_URL}/reset-password/${resetToken}`;
-
-  // TODO: Send Email (Mocking for now)
-  logger.info(`[MOCK EMAIL SEND] To: ${user.email} | Reset URL: ${resetUrl}`);
 
   return res
     .status(200)
@@ -254,7 +259,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
       new ApiResponse(
         200,
         {},
-        'Password reset token generated and sent to email',
+        'If an account exists for that email, a password reset link has been sent',
       ),
     );
 });

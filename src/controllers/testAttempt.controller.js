@@ -46,7 +46,10 @@ export const startTest = asyncHandler(async (req, res) => {
     );
   }
   if (hack.end_time && now > new Date(hack.end_time)) {
-    throw new ApiError(403, 'The scheduled time window for this test has ended.');
+    throw new ApiError(
+      403,
+      'The scheduled time window for this test has ended.',
+    );
   }
 
   let activeAttempt = await TestAttempt.findOne({
@@ -129,6 +132,8 @@ export const saveAnswer = asyncHandler(async (req, res) => {
   }
 
   const hack = await Hack.findById(attempt.hack);
+  if (!hack)
+    throw new ApiError(404, 'The test for this attempt no longer exists');
 
   // Find the question and option
   const question = hack.questions.find((q) => q._id.toString() === question_id);
@@ -228,6 +233,9 @@ export const evaluateTest = asyncHandler(async (req, res) => {
   }
 
   const hack = await Hack.findById(attempt.hack);
+  if (!hack)
+    throw new ApiError(404, 'The test for this attempt no longer exists');
+
   let score = 0;
 
   // Calculate score
@@ -242,9 +250,16 @@ export const evaluateTest = asyncHandler(async (req, res) => {
       if (selectedOption && selectedOption.is_correct) {
         answer.is_correct = true;
         score += question.marks;
-      } else if (hack.negative_marking) {
-        score -= hack.negative_marks_per_wrong;
+      } else {
+        // Re-evaluating must be able to clear a previous true, otherwise a
+        // stale flag survives and inflates the correct-answer counts.
+        answer.is_correct = false;
+        if (hack.negative_marking) {
+          score -= hack.negative_marks_per_wrong;
+        }
       }
+    } else {
+      answer.is_correct = false;
     }
   });
 

@@ -178,9 +178,19 @@ export const getHacks = asyncHandler(async (req, res) => {
   if (req.query.category) {
     filter.category = req.query.category;
   }
+  // Publishing is stored as is_active; accept the PUBLISHED/DRAFT vocabulary
+  // the admin UI sends rather than silently ignoring it. Students are pinned
+  // to is_active: true above, so this only widens/narrows the admin view.
+  if (isAdmin && req.query.status) {
+    const status = String(req.query.status).toUpperCase();
+    if (status === 'PUBLISHED') filter.is_active = true;
+    else if (status === 'DRAFT') filter.is_active = false;
+  }
 
   let query = Hack.find(filter)
-    .select('-questions.options.is_correct') // Hide correct answers for students
+    // Hide correct answers from students, and don't hand out the admin's user
+    // id — it is the one thing an attacker needs to target an account.
+    .select(isAdmin ? '' : '-questions.options.is_correct -created_by')
     .sort({ createdAt: -1 });
 
   if (req.query.limit) {
@@ -207,8 +217,10 @@ export const getHackById = asyncHandler(async (req, res) => {
   if (!req.user || req.user.role !== 'ADMIN') filter.is_active = true;
 
   const hack = await Hack.findOne(filter).select(
-    req.user?.role !== 'ADMIN' ? '-questions.options.is_correct' : '',
-  ); // Hide answers unless admin
+    req.user?.role !== 'ADMIN'
+      ? '-questions.options.is_correct -created_by'
+      : '',
+  ); // Hide answers (and the author's user id) unless admin
 
   if (!hack) throw new ApiError(404, 'Hack not found');
 
@@ -296,7 +308,8 @@ export const checkAccess = asyncHandler(async (req, res) => {
   const scheduleStatus = getScheduleStatus(hack, now);
   if (hasAccess && scheduleStatus === 'upcoming') {
     hasAccess = false;
-    reason = 'This test has not started yet. Please wait for the scheduled start time.';
+    reason =
+      'This test has not started yet. Please wait for the scheduled start time.';
   } else if (scheduleStatus === 'ended') {
     hasAccess = false;
     reason = 'The scheduled time window for this test has ended.';

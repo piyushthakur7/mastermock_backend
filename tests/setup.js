@@ -7,7 +7,7 @@ let mongoServer;
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   const uri = mongoServer.getUri();
-  
+
   // Update the test environment MONGO_URI
   env.MONGO_URI = uri;
 

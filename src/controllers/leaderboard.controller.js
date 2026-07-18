@@ -59,11 +59,12 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
   // Reshape the entries for cleaner output
   entries = entries.map((entry) => ({
     rank: entry.rank,
+    // No email here — the leaderboard is visible to every logged-in student,
+    // so including it published the address of everyone who took the test.
     user: entry.user
       ? {
           _id: entry.user._id,
           full_name: entry.user.full_name,
-          email: entry.user.email,
           profile_picture: entry.user.profile_picture,
         }
       : null,
@@ -90,6 +91,12 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
 export const getMyRank = asyncHandler(async (req, res) => {
   const { testId } = req.params;
   const userId = req.user._id;
+
+  // Without this a malformed id reaches the ObjectId constructor and throws a
+  // raw BSONError, which surfaces as a 500 instead of a 400.
+  if (!mongoose.Types.ObjectId.isValid(testId)) {
+    return res.status(400).json(new ApiResponse(400, null, 'Invalid test ID'));
+  }
 
   // Get the user's best score
   const userBest = await TestAttempt.aggregate([

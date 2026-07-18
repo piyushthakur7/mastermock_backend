@@ -1,6 +1,31 @@
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 
+// Error logs capture the request body, which on the auth routes means
+// plaintext passwords and reset tokens land in logs/. Mask them.
+const SENSITIVE_FIELDS = new Set([
+  'password',
+  'newPassword',
+  'oldPassword',
+  'confirmPassword',
+  'password_hash',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'razorpay_signature',
+]);
+
+const redactBody = (body) => {
+  if (!body || typeof body !== 'object') return undefined;
+  const keys = Object.keys(body);
+  if (!keys.length) return undefined;
+
+  return keys.reduce((acc, key) => {
+    acc[key] = SENSITIVE_FIELDS.has(key) ? '[REDACTED]' : body[key];
+    return acc;
+  }, {});
+};
+
 export const errorHandler = (err, req, res, next) => {
   let statusCode = err.statusCode || 500;
   let message = err.message || 'Internal Server Error';
@@ -26,7 +51,7 @@ export const errorHandler = (err, req, res, next) => {
     duration,
     ip: req.ip,
     userAgent: req.headers['user-agent'],
-    body: Object.keys(req.body || {}).length ? req.body : undefined,
+    body: redactBody(req.body),
     stack: err.stack,
   };
 

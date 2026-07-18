@@ -29,7 +29,32 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
 });
 
-const _env = envSchema.safeParse(process.env);
+// The token secrets have development defaults so a fresh clone runs without
+// setup. Those defaults are public (they are in this file), so anyone could
+// sign a token for any user id — and user ids are handed out by the API. Fail
+// fast rather than silently booting production with a known signing key.
+const requireRealSecretsInProduction = (data, ctx) => {
+  if (data.NODE_ENV !== 'production') return;
+
+  const defaults = {
+    ACCESS_TOKEN_SECRET: 'development_secret_access',
+    REFRESH_TOKEN_SECRET: 'development_secret_refresh',
+  };
+
+  for (const [key, devDefault] of Object.entries(defaults)) {
+    if (data[key] === devDefault) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} must be set to a real secret in production (it is currently the public development default)`,
+      });
+    }
+  }
+};
+
+const _env = envSchema
+  .superRefine(requireRealSecretsInProduction)
+  .safeParse(process.env);
 
 if (!_env.success) {
   console.error('❌ Invalid environment variables:', _env.error.format());
@@ -37,6 +62,18 @@ if (!_env.success) {
 }
 
 export const env = _env.data;
+
+if (_env.data.ACCESS_TOKEN_SECRET === 'development_secret_access') {
+  console.warn(
+    '⚠️  ACCESS_TOKEN_SECRET is the public development default. Anyone can forge a session token. Set it before deploying.',
+  );
+}
+
+if (_env.data.CORS_ORIGIN === '*') {
+  console.warn(
+    '⚠️  CORS_ORIGIN is "*" while credentials are enabled. Browsers reject credentialed requests to a wildcard origin — set it to your frontend URL.',
+  );
+}
 
 // Startup warnings for critical payment config
 if (!_env.data.RAZORPAY_KEY_ID || !_env.data.RAZORPAY_KEY_SECRET) {

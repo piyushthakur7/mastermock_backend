@@ -31,6 +31,9 @@ export const verifyJWT = asyncHandler(async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
+    // Only token problems are 401s. Blanket-rewrapping also downgraded the
+    // suspended-account 403 and disguised database outages as auth failures.
+    if (error instanceof ApiError) throw error;
     throw new ApiError(401, error?.message || 'Invalid access token');
   }
 });

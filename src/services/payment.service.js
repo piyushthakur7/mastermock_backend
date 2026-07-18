@@ -291,18 +291,20 @@ export const verifyPayment = async (
     throw new ApiError(404, 'Payment order not found');
   }
 
-  // If already verified (e.g. by webhook), return immediately
-  if (payment.status === 'SUCCESS') {
-    logger.info(`Payment already verified: order=${razorpayOrderId}`);
-    return payment;
-  }
-
-  // Security: ensure the payment belongs to the requesting user
+  // Security: ensure the payment belongs to the requesting user. This has to
+  // come before the already-verified shortcut below, otherwise any logged-in
+  // user can read back someone else's payment record by guessing an order id.
   if (payment.user.toString() !== userId.toString()) {
     throw new ApiError(
       403,
       'Unauthorized: payment does not belong to this user',
     );
+  }
+
+  // If already verified (e.g. by webhook), return immediately
+  if (payment.status === 'SUCCESS') {
+    logger.info(`Payment already verified: order=${razorpayOrderId}`);
+    return payment;
   }
 
   // HMAC signature verification — no fallback
