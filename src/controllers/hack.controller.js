@@ -151,9 +151,26 @@ export const bulkUploadQuestions = asyncHandler(async (req, res) => {
 
 // --- STUDENT / PUBLIC ---
 
+// Where a hack sits relative to its scheduled window right now.
+// 'unscheduled' = no window set, always available once published.
+export const getScheduleStatus = (hack, now = new Date()) => {
+  if (!hack.start_time && !hack.end_time) return 'unscheduled';
+  if (hack.start_time && now < new Date(hack.start_time)) return 'upcoming';
+  if (hack.end_time && now > new Date(hack.end_time)) return 'ended';
+  return 'live';
+};
+
 export const getHacks = asyncHandler(async (req, res) => {
+  const now = new Date();
   const filter = { isDeleted: false };
-  if (!req.user || req.user.role !== 'ADMIN') filter.is_active = true;
+  const isAdmin = req.user && req.user.role === 'ADMIN';
+  if (!isAdmin) {
+    filter.is_active = true;
+    // Ended scheduled tests disappear from student listings. Upcoming tests
+    // stay visible so the UI can show "coming soon" (start is blocked
+    // server-side in checkAccess/startTest).
+    filter.$or = [{ end_time: null }, { end_time: { $gt: now } }];
+  }
 
   if (req.query.access_type) {
     filter.access_type = req.query.access_type;
@@ -172,9 +189,17 @@ export const getHacks = asyncHandler(async (req, res) => {
 
   const hacks = await query;
 
+  // Attach schedule_status + server_time so clients don't depend on the
+  // student's device clock to decide upcoming/live/ended.
+  const payload = hacks.map((h) => ({
+    ...h.toObject(),
+    schedule_status: getScheduleStatus(h, now),
+    server_time: now.toISOString(),
+  }));
+
   return res
     .status(200)
-    .json(new ApiResponse(200, hacks, 'Hacks fetched successfully'));
+    .json(new ApiResponse(200, payload, 'Hacks fetched successfully'));
 });
 
 export const getHackById = asyncHandler(async (req, res) => {
@@ -229,6 +254,8 @@ export const checkAccess = asyncHandler(async (req, res) => {
 
   let hasAccess = false;
   let reason = '';
+  let attemptExhausted = false;
+  let hasPurchased = false;
 
   if (hack.access_type === 'free') {
     hasAccess = true;
@@ -242,6 +269,7 @@ export const checkAccess = asyncHandler(async (req, res) => {
     });
 
     if (purchase) {
+      hasPurchased = true;
       const attemptCount = await mongoose.model('TestAttempt').countDocuments({
         user: req.user._id,
         hack: hack._id,
@@ -249,8 +277,8 @@ export const checkAccess = asyncHandler(async (req, res) => {
 
       if (attemptCount >= 1) {
         hasAccess = false;
+        attemptExhausted = true;
         reason = 'Paid test already attempted (One-time attempt only)';
-        var attempt_exhausted = true;
       } else {
         hasAccess = true;
         reason = 'Paid hack — purchase verified';
@@ -261,6 +289,19 @@ export const checkAccess = asyncHandler(async (req, res) => {
     }
   }
 
+  // Scheduled window gate: has_access means "can start RIGHT NOW", so an
+  // upcoming or ended window overrides everything above. Purchase state is
+  // reported separately so the UI can still sell an upcoming paid test.
+  const now = new Date();
+  const scheduleStatus = getScheduleStatus(hack, now);
+  if (hasAccess && scheduleStatus === 'upcoming') {
+    hasAccess = false;
+    reason = 'This test has not started yet. Please wait for the scheduled start time.';
+  } else if (scheduleStatus === 'ended') {
+    hasAccess = false;
+    reason = 'The scheduled time window for this test has ended.';
+  }
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -269,8 +310,12 @@ export const checkAccess = asyncHandler(async (req, res) => {
         access_type: hack.access_type,
         price: hack.price,
         reason,
-        attempt_exhausted:
-          typeof attempt_exhausted !== 'undefined' ? attempt_exhausted : false,
+        attempt_exhausted: attemptExhausted,
+        has_purchased: hasPurchased,
+        schedule_status: scheduleStatus,
+        start_time: hack.start_time || null,
+        end_time: hack.end_time || null,
+        server_time: now.toISOString(),
       },
       'Access check completed',
     ),
