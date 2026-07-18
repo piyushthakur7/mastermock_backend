@@ -20,17 +20,33 @@ const baseHackSchema = z.object({
   negative_marks_per_wrong: z.number().min(0).default(0),
   total_marks: z.number().min(1),
   duration_minutes: z.number().min(1),
+  // Scheduled window. Validation replaces req.body with the parsed result, so
+  // omitting these here silently discarded the admin's schedule on save.
+  start_time: z.string().datetime({ offset: true }).nullable().optional(),
+  end_time: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
-export const createHackSchema = baseHackSchema.refine(
-  (data) => data.access_type !== 'paid' || data.price > 0,
-  {
+const scheduleWindowRefinement = {
+  check: (data) =>
+    !data.start_time ||
+    !data.end_time ||
+    new Date(data.end_time) > new Date(data.start_time),
+  options: {
+    message: 'End time must be after start time',
+    path: ['end_time'],
+  },
+};
+
+export const createHackSchema = baseHackSchema
+  .refine((data) => data.access_type !== 'paid' || data.price > 0, {
     message: 'Price must be greater than 0 for paid tests',
     path: ['price'],
-  },
-);
+  })
+  .refine(scheduleWindowRefinement.check, scheduleWindowRefinement.options);
 
-export const updateHackSchema = baseHackSchema.partial();
+export const updateHackSchema = baseHackSchema
+  .partial()
+  .refine(scheduleWindowRefinement.check, scheduleWindowRefinement.options);
 
 export const questionSchema = z.object({
   text: z.string().min(1, 'Question text is required'),

@@ -20,6 +20,18 @@ export const startTest = asyncHandler(async (req, res) => {
   });
   if (!hack) throw new ApiError(404, 'Hack not found or inactive');
 
+  // Scheduled window applies to every test (free or paid) that has one set.
+  const now = new Date();
+  if (hack.start_time && now < new Date(hack.start_time)) {
+    throw new ApiError(
+      403,
+      'This test has not started yet. Please wait for the scheduled start time.',
+    );
+  }
+  if (hack.end_time && now > new Date(hack.end_time)) {
+    throw new ApiError(403, 'The scheduled time window for this test has ended.');
+  }
+
   let activeAttempt = await TestAttempt.findOne({
     user: userId,
     hack: hack_id,
@@ -28,18 +40,6 @@ export const startTest = asyncHandler(async (req, res) => {
 
   // Check if paid test requires purchase
   if (hack.access_type === 'paid') {
-    if (hack.start_time && new Date() < new Date(hack.start_time)) {
-      throw new ApiError(
-        403,
-        'This hack is not available yet. Please wait for the scheduled start time.',
-      );
-    }
-    if (hack.end_time && new Date() > new Date(hack.end_time)) {
-      throw new ApiError(
-        403,
-        'The scheduled time window for this hack has ended.',
-      );
-    }
     const purchaseCount = await Purchase.countDocuments({
       user: userId,
       item_id: hack_id,
@@ -73,8 +73,19 @@ export const startTest = asyncHandler(async (req, res) => {
       answers: [],
     });
 
-    // Schedule BullMQ auto-submit job
-    await scheduleAutoSubmit(activeAttempt._id, hack.duration_minutes);
+    // Schedule BullMQ auto-submit job. If the test has a scheduled end_time,
+    // clamp the attempt to it — a student starting late gets only the time
+    // remaining in the window, so no attempt runs past the window close.
+    let effectiveMinutes = hack.duration_minutes;
+    if (hack.end_time) {
+      const minutesUntilClose =
+        (new Date(hack.end_time).getTime() - Date.now()) / 60000;
+      effectiveMinutes = Math.max(
+        1,
+        Math.min(hack.duration_minutes, Math.ceil(minutesUntilClose)),
+      );
+    }
+    await scheduleAutoSubmit(activeAttempt._id, effectiveMinutes);
   }
 
   return res
