@@ -23,9 +23,21 @@ app.use(correlationIdMiddleware);
 app.use(helmet());
 
 // 2. CORS Policy
+// The cors package compares CORS_ORIGIN against the browser's Origin header
+// with exact string equality, and Origin never has a trailing slash — so
+// "https://mastermocks.in/" in .env silently fails every preflight. Strip
+// trailing slashes and accept a comma-separated list so the env value can't
+// break CORS.
+const corsOrigin =
+  env.CORS_ORIGIN === '*'
+    ? '*'
+    : env.CORS_ORIGIN.split(',')
+        .map((origin) => origin.trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: corsOrigin,
     credentials: true,
   }),
 );
