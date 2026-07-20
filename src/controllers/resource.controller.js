@@ -15,7 +15,16 @@ import crypto from 'crypto';
 // @route   POST /api/v1/resources
 // @access  Private/Admin
 export const uploadResource = asyncHandler(async (req, res) => {
-  const { title, description, course, category, resource_type } = req.body;
+  const {
+    title,
+    description,
+    course,
+    category,
+    resource_type,
+    access_type,
+    price,
+    discount_price,
+  } = req.body;
 
   // Validate course reference if provided
   if (course) {
@@ -43,6 +52,9 @@ export const uploadResource = asyncHandler(async (req, res) => {
     course: course || undefined,
     category: category || undefined,
     resource_type,
+    access_type: access_type || 'free',
+    price: price || 0,
+    discount_price,
     file_url: publicId, // Storing the Cloudinary publicId here for signed URLs later
     created_by: req.user._id,
   });

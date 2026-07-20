@@ -2,13 +2,29 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { User } from '../models/user.model.js';
+import { Enrollment } from '../models/enrollment.model.js';
 
 // @desc    Get current user profile
 // @route   GET /api/v1/users/me
 export const getCurrentUser = asyncHandler(async (req, res) => {
+  // Enrollment lives in its own collection, not on the User document — the
+  // frontend's course pages read user.enrolledCourses to decide whether to
+  // show "Already Enrolled" vs a purchase/enroll button.
+  const enrollments = await Enrollment.find({
+    user: req.user._id,
+    status: 'ACTIVE',
+  }).select('course');
+  const enrolledCourses = enrollments.map((e) => e.course.toString());
+
   return res
     .status(200)
-    .json(new ApiResponse(200, req.user, 'User profile fetched successfully'));
+    .json(
+      new ApiResponse(
+        200,
+        { ...req.user.toObject(), enrolledCourses },
+        'User profile fetched successfully',
+      ),
+    );
 });
 
 // @desc    Update account details

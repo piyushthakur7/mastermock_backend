@@ -27,6 +27,8 @@ const resourceSchema = new Schema(
       default: 'free',
       index: true,
     },
+    price: { type: Number, default: 0 },
+    discount_price: { type: Number },
     created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     is_active: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },

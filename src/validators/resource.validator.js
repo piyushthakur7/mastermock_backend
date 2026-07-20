@@ -12,4 +12,8 @@ export const createResourceSchema = z.object({
     .regex(/^[0-9a-fA-F]{24}$/, 'Invalid category ID')
     .optional(),
   resource_type: z.enum(['pdf', 'video', 'notes', 'assignment', 'solution']),
+  // multipart/form-data values arrive as strings even for numbers.
+  access_type: z.enum(['free', 'paid']).optional(),
+  price: z.coerce.number().min(0).optional(),
+  discount_price: z.coerce.number().min(0).optional(),
 });
