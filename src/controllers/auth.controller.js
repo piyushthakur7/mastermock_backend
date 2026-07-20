@@ -41,13 +41,25 @@ export const registerUser = asyncHandler(async (req, res) => {
     phone_number,
   });
 
+  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+    user._id,
+  );
+
   const createdUser = await User.findById(user._id).select(
     '-password_hash -refresh_token',
   );
 
   return res
     .status(201)
-    .json(new ApiResponse(201, createdUser, 'User registered successfully'));
+    .cookie('accessToken', accessToken, cookieOptions)
+    .cookie('refreshToken', refreshToken, cookieOptions)
+    .json(
+      new ApiResponse(
+        201,
+        { user: createdUser, accessToken, refreshToken },
+        'User registered successfully',
+      ),
+    );
 });
 
 // @desc    Login a user
