@@ -1,4 +1,6 @@
 import { TestAttempt } from '../models/testAttempt.model.js';
+import { Hack } from '../models/hack.model.js';
+import { scoreAttempt } from '../services/scoring.service.js';
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -23,15 +25,31 @@ export const setupExamWorker = () => {
 
   const sweep = async () => {
     try {
-      const result = await TestAttempt.updateMany(
-        { status: 'IN_PROGRESS', expires_at: { $lte: new Date() } },
-        [{ $set: { status: 'COMPLETED', completed_at: '$expires_at' } }],
-      );
-      if (result.modifiedCount > 0) {
-        console.log(
-          `Auto-submitted ${result.modifiedCount} expired attempt(s)`,
-        );
+      const expired = await TestAttempt.find({
+        status: 'IN_PROGRESS',
+        expires_at: { $lte: new Date() },
+      });
+      if (!expired.length) return;
+
+      // Attempts must be scored as they complete — the leaderboard reads
+      // COMPLETED attempts directly, so a bulk update without scoring would
+      // leave everyone auto-submitted stuck at 0. Cache hacks per sweep
+      // since many expired attempts usually belong to the same test.
+      const hackCache = new Map();
+      for (const attempt of expired) {
+        attempt.status = 'COMPLETED';
+        attempt.completed_at = attempt.expires_at;
+
+        const hackId = attempt.hack.toString();
+        if (!hackCache.has(hackId)) {
+          hackCache.set(hackId, await Hack.findById(hackId));
+        }
+        const hack = hackCache.get(hackId);
+        if (hack) scoreAttempt(attempt, hack);
+
+        await attempt.save();
       }
+      console.log(`Auto-submitted ${expired.length} expired attempt(s)`);
     } catch (err) {
       console.error('Auto-submit sweep failed:', err.message);
     }

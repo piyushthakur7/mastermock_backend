@@ -113,6 +113,7 @@ export const getMyRank = asyncHandler(async (req, res) => {
         best_score: { $max: '$score' },
         best_percentage: { $max: '$percentage' },
         total_attempts: { $sum: 1 },
+        last_attempt_at: { $max: '$completed_at' },
       },
     },
   ]);
@@ -130,8 +131,11 @@ export const getMyRank = asyncHandler(async (req, res) => {
   }
 
   const myBestScore = userBest[0].best_score;
+  const myLastAttemptAt = userBest[0].last_attempt_at;
 
-  // Count how many users have a higher best score
+  // Count users ranked ahead of me, using the same ordering as the
+  // leaderboard endpoint (best_score desc, then earlier last attempt wins) —
+  // otherwise a tied user sees a different rank here than on the board.
   const higherScoreUsers = await TestAttempt.aggregate([
     {
       $match: {
@@ -143,11 +147,18 @@ export const getMyRank = asyncHandler(async (req, res) => {
       $group: {
         _id: '$user',
         best_score: { $max: '$score' },
+        last_attempt_at: { $max: '$completed_at' },
       },
     },
     {
       $match: {
-        best_score: { $gt: myBestScore },
+        $or: [
+          { best_score: { $gt: myBestScore } },
+          {
+            best_score: myBestScore,
+            last_attempt_at: { $lt: myLastAttemptAt },
+          },
+        ],
       },
     },
     { $count: 'count' },

@@ -4,6 +4,7 @@ import { Purchase } from '../models/purchase.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { scoreAttempt } from '../services/scoring.service.js';
 
 // Lazily enforce the attempt deadline: the background sweeper completes
 // expired attempts once a minute, but a request can land in between (or the
@@ -17,6 +18,10 @@ const finalizeIfExpired = async (attempt) => {
   ) {
     attempt.status = 'COMPLETED';
     attempt.completed_at = attempt.expires_at;
+    // Score at completion — the leaderboard reads COMPLETED attempts
+    // directly, so an unscored completion would show up as 0.
+    const hack = await Hack.findById(attempt.hack);
+    if (hack) scoreAttempt(attempt, hack);
     await attempt.save();
     return true;
   }
@@ -196,6 +201,10 @@ export const submitTest = asyncHandler(async (req, res) => {
 
   attempt.status = 'COMPLETED';
   attempt.completed_at = new Date();
+  // Score at completion so the leaderboard never sees an unscored attempt;
+  // if the hack was deleted mid-attempt, still complete (score stays 0).
+  const hack = await Hack.findById(attempt.hack);
+  if (hack) scoreAttempt(attempt, hack);
   await attempt.save();
 
   return res
@@ -236,36 +245,7 @@ export const evaluateTest = asyncHandler(async (req, res) => {
   if (!hack)
     throw new ApiError(404, 'The test for this attempt no longer exists');
 
-  let score = 0;
-
-  // Calculate score
-  attempt.answers.forEach((answer) => {
-    const question = hack.questions.find(
-      (q) => q._id.toString() === answer.question_id.toString(),
-    );
-    if (question && answer.selected_option_id) {
-      const selectedOption = question.options.find(
-        (o) => o._id.toString() === answer.selected_option_id.toString(),
-      );
-      if (selectedOption && selectedOption.is_correct) {
-        answer.is_correct = true;
-        score += question.marks;
-      } else {
-        // Re-evaluating must be able to clear a previous true, otherwise a
-        // stale flag survives and inflates the correct-answer counts.
-        answer.is_correct = false;
-        if (hack.negative_marking) {
-          score -= hack.negative_marks_per_wrong;
-        }
-      }
-    } else {
-      answer.is_correct = false;
-    }
-  });
-
-  attempt.score = Math.max(0, score);
-  attempt.percentage = (attempt.score / hack.total_marks) * 100;
-
+  scoreAttempt(attempt, hack);
   await attempt.save();
 
   return res
