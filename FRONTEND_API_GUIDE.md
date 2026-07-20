@@ -19,6 +19,7 @@
 8. [Complete User Flows](#8-complete-user-flows)
 9. [Data Models Reference](#9-data-models-reference)
 10. [Error Codes Reference](#10-error-codes-reference)
+11. [Categories (Dynamic Filters)](#11-categories-dynamic-filters)
 
 ---
 
@@ -909,6 +910,74 @@ Error responses:
 | `GET` | `/payments/my-history` | Student | Full payment history |
 | `GET` | `/leaderboard/:testId` | Student | Paginated leaderboard (**updated**) |
 | `GET` | `/leaderboard/:testId/my-rank` | Student | User's own rank |
+
+---
+
+## 11. Categories (Dynamic Filters)
+
+> **Do not hardcode the category list** (e.g. "Reasoning Ability", "Quantitative Aptitude", "Daily Current Affairs") in the frontend or admin panel. Categories live in MongoDB and are managed by admins — always fetch them from the API below so new/renamed/removed categories show up without a redeploy.
+
+### 11.1 List Categories
+
+```
+GET /api/v1/categories
+```
+
+**Auth:** None (public)
+
+**Response:**
+```json
+{
+  "statusCode": 200,
+  "data": [
+    { "_id": "6a4f705bc26cbf91cde57dff", "name": "Reasoning Ability", "description": "...", "parentCategory": null, "createdAt": "..." },
+    { "_id": "6a4f705bc26cbf91cde57e00", "name": "Quantitative Aptitude", "description": "...", "parentCategory": null, "createdAt": "..." },
+    { "_id": "6a4f705bc26cbf91cde57e01", "name": "Daily Current Affairs", "description": "...", "parentCategory": null, "createdAt": "..." }
+  ],
+  "message": "Categories fetched successfully"
+}
+```
+
+Use this to render the submenu under **Free Mocks**, **Paid Mock Test**, and **Free PDFs** in the sidebar — one link per category.
+
+### 11.2 Get Single Category
+
+```
+GET /api/v1/categories/:id
+```
+
+**Auth:** None (public)
+
+### 11.3 Create / Update / Delete a Category (Admin Panel)
+
+```
+POST   /api/v1/categories        { name, description? }
+PUT    /api/v1/categories/:id    { name?, description? }
+DELETE /api/v1/categories/:id
+```
+
+**Auth:** `ADMIN` role required (`Authorization: Bearer <admin_token>`)
+
+**Validation:** `name` is required, 2–100 chars, must be unique (case-sensitive). `description` is optional free text.
+
+This is the CRUD the admin panel's "Manage Categories" screen should call — there is no separate seed/config file to edit; categories only ever come from this collection.
+
+### 11.4 Filtering Content by Category
+
+`category` is a subject tag shared by mock tests and PDFs — it doesn't itself decide Free vs. Paid vs. PDF. Combine it with `access_type` (mock tests) or `resource_type` (resources):
+
+| Sidebar section | Request |
+|---|---|
+| Free Mocks, filtered by category | `GET /api/v1/hacks?access_type=free&category=<categoryId>` |
+| Paid Mock Test, filtered by category | `GET /api/v1/hacks?access_type=paid&category=<categoryId>` |
+| Free PDFs, filtered by category | `GET /api/v1/resources?resource_type=pdf&category=<categoryId>` |
+
+> Note: the live mock-test route is `/api/v1/hacks` (see `src/app.js`). Earlier examples in [Section 2](#2-mock-test-apis) reference `/mock-tests` from an older API iteration — use `/hacks` for all new integration work.
+
+**Suggested flow for "ALL PAID MOCK TEST" submenu:**
+1. On sidebar load, call `GET /api/v1/categories` once and cache it.
+2. Render each category `name` as a submenu link.
+3. On click, call `GET /api/v1/hacks?access_type=paid&category=<id>` to list that category's tests.
 
 ---
 
