@@ -219,12 +219,33 @@ export const getAttempt = asyncHandler(async (req, res) => {
   const attempt = await TestAttempt.findOne({
     _id: req.params.attemptId,
     user: req.user._id,
+  }).populate({
+    path: 'hack',
+    select: 'title course',
+    populate: { path: 'course', select: 'title' },
   });
   if (!attempt) throw new ApiError(404, 'Attempt not found');
 
   await finalizeIfExpired(attempt);
 
-  return res.status(200).json(new ApiResponse(200, attempt, 'Attempt fetched'));
+  // Same shaping as getMyAttempts — the results page reads `test`,
+  // `totalAttempted`, and `correctAnswers`, none of which exist on the raw
+  // document.
+  const obj = attempt.toObject();
+  const totalAttempted = obj.answers ? obj.answers.length : 0;
+  const correctAnswers = obj.answers
+    ? obj.answers.filter((a) => a.is_correct).length
+    : 0;
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { ...obj, test: obj.hack, totalAttempted, correctAnswers },
+        'Attempt fetched',
+      ),
+    );
 });
 
 // @desc    Evaluate test results

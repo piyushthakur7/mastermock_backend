@@ -38,7 +38,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const inquiries = await Inquiry.find()
       .sort({ createdAt: -1 })
-      .populate('student', 'name email');
+      .populate('student', 'full_name email');
     res.json(new ApiResponse(200, inquiries, 'All inquiries'));
   }),
 );
@@ -50,7 +50,7 @@ router.post(
     const inquiry = await Inquiry.findByIdAndUpdate(
       req.params.id,
       {
-        admin_reply: req.body.reply,
+        admin_reply: req.body.message,
         status: 'RESOLVED',
         replied_by: req.user._id,
         replied_at: new Date(),

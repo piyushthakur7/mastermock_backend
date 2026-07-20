@@ -155,7 +155,10 @@ export const createOrder = async (userId, itemId, itemType) => {
     );
     return {
       order_id: existingPending.razorpay_order_id,
-      amount: existingPending.amount,
+      // The order itself was created with the amount in paise (Razorpay's
+      // required unit) — this must match, or Checkout's amount disagrees
+      // with what the order_id was actually created for.
+      amount: Math.round(existingPending.amount * 100),
       currency: existingPending.currency,
       key_id: env.RAZORPAY_KEY_ID,
     };
@@ -201,7 +204,10 @@ export const createOrder = async (userId, itemId, itemType) => {
 
   return {
     order_id: order.id,
-    amount,
+    // Razorpay Checkout's `amount` option must be in paise and match the
+    // order it was created with (amountInPaise above) — returning the raw
+    // rupee value here disagreed with the order itself.
+    amount: amountInPaise,
     currency: 'INR',
     key_id: env.RAZORPAY_KEY_ID,
   };
