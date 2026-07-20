@@ -7,8 +7,6 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
-import { clearRateLimitKey } from '../middlewares/rateLimiter.middleware.js';
-
 const generateAccessAndRefreshTokens = async (userId) => {
   const user = await User.findById(userId);
   const accessToken = user.generateAccessToken();
@@ -69,9 +67,6 @@ export const loginUser = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Invalid credentials');
   }
 
-  // Successful login — reset the brute-force counter for this IP + email.
-  await clearRateLimitKey(req, 'login');
-
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,
   );
@@ -117,9 +112,6 @@ export const adminLogin = asyncHandler(async (req, res) => {
   if (user.role !== 'ADMIN') {
     throw new ApiError(403, 'Access denied. Only admins can use this login.');
   }
-
-  // Successful login — reset the brute-force counter for this IP + email.
-  await clearRateLimitKey(req, 'admin-login');
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,

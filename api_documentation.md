@@ -137,19 +137,13 @@ Cookie: accessToken=<accessToken>; refreshToken=<refreshToken>
 | `403` | Forbidden (wrong role / suspended / account locked) |
 | `404` | Not Found                         |
 | `409` | Conflict (duplicate entry)        |
-| `429` | Too Many Requests (rate limited)  |
 | `500` | Internal Server Error             |
 
 ---
 
 ## 5. Rate Limiting
 
-| Limiter              | Scope               | Limit                                     |
-| -------------------- | -------------------- | ----------------------------------------- |
-| **Global Limiter**   | All `/api/*` routes  | 100 requests per 15 minutes per IP        |
-| **Auth Limiter**     | Login route only     | 10 requests per 1 hour per IP             |
-
-When rate limited, the API returns `429 Too Many Requests`.
+The API has no rate limiting. All endpoints accept unlimited requests.
 
 ---
 
@@ -463,7 +457,7 @@ Base Path: `/api/v1/auth`
 
 #### `POST /api/v1/auth/login`
 
-🟢 **Public** (rate limited: 10 attempts/hour)
+🟢 **Public**
 
 **Description:** Login with email and password. Returns tokens in both cookies and response body.
 
