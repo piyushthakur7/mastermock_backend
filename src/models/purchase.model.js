@@ -18,7 +18,7 @@ const purchaseSchema = new Schema(
     item_type: {
       type: String,
       required: true,
-      enum: ['Course', 'Hack'],
+      enum: ['Course', 'Hack', 'Resource'],
     },
     payment: { type: Schema.Types.ObjectId, ref: 'Payment', required: true },
     amount: { type: Number },
@@ -31,6 +31,19 @@ const purchaseSchema = new Schema(
     },
   },
   { timestamps: true },
+);
+
+// A user can hold at most ONE active purchase of a given item.
+//
+// grantAccess() has always caught error code 11000 here "in case another
+// process created it concurrently" — but with no unique index that catch was
+// unreachable and the surrounding findOne-then-create was a plain check-then-
+// act race, so concurrent verify/webhook/poll paths could each insert a row.
+// Partial (rather than plain) unique so a REFUNDED or EXPIRED purchase does
+// not block the user from buying the same item again.
+purchaseSchema.index(
+  { user: 1, item_id: 1, item_type: 1 },
+  { unique: true, partialFilterExpression: { status: 'ACTIVE' } },
 );
 
 purchaseSchema.plugin(mongooseAggregatePaginate);

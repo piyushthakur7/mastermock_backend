@@ -39,3 +39,6 @@ Thumbs.db
 createAdmin.js
 unlock.js
 FRONTEND_API_GUIDE.md
+
+# Uploaded files (served from object storage in production; never committed)
+uploads/

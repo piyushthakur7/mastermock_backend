@@ -49,7 +49,7 @@ export const updateCourse = asyncHandler(async (req, res) => {
 export const deleteCourse = asyncHandler(async (req, res) => {
   const course = await Course.findOneAndUpdate(
     { _id: req.params.id, isDeleted: false },
-    { $set: { isDeleted: true, deletedAt: new Date() } },
+    { $set: { isDeleted: true, deletedAt: new Date(), is_active: false } },
     { new: true },
   );
 
@@ -163,19 +163,40 @@ export const enrollCourse = asyncHandler(async (req, res) => {
     user: req.user._id,
     course: course._id,
   });
+
   if (existingEnrollment) {
-    throw new ApiError(400, 'You are already enrolled in this course');
+    if (existingEnrollment.status === 'ACTIVE') {
+      throw new ApiError(400, 'You are already enrolled in this course');
+    }
+    // Re-enrolling in a free course after a revoked/expired enrolment.
+    existingEnrollment.status = 'ACTIVE';
+    await existingEnrollment.save();
+    return res
+      .status(200)
+      .json(new ApiResponse(200, existingEnrollment, 'Enrollment reactivated'));
   }
 
-  const enrollment = await Enrollment.create({
-    user: req.user._id,
-    course: course._id,
-    status: 'ACTIVE',
-  });
+  try {
+    const enrollment = await Enrollment.create({
+      user: req.user._id,
+      course: course._id,
+      status: 'ACTIVE',
+    });
 
-  return res
-    .status(201)
-    .json(new ApiResponse(201, enrollment, 'Successfully enrolled in course'));
+    return res
+      .status(201)
+      .json(
+        new ApiResponse(201, enrollment, 'Successfully enrolled in course'),
+      );
+  } catch (error) {
+    // Lost the race against a concurrent enrol — a double-clicked button was
+    // enough. The unique index on {user, course} rejects the second insert;
+    // without this catch that surfaced to the user as a 500.
+    if (error?.code === 11000) {
+      throw new ApiError(400, 'You are already enrolled in this course');
+    }
+    throw error;
+  }
 });
 
 // @desc    Get my enrolled courses

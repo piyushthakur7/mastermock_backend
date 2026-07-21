@@ -5,27 +5,30 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { scoreAttempt } from '../services/scoring.service.js';
+import {
+  finalizeAttempt,
+  finalizeIfExpired,
+} from '../services/attempt.service.js';
 
-// Lazily enforce the attempt deadline: the background sweeper completes
-// expired attempts once a minute, but a request can land in between (or the
-// sweeper may be disabled on serverless), so controllers finalize on access.
-const finalizeIfExpired = async (attempt) => {
-  if (
-    attempt &&
-    attempt.status === 'IN_PROGRESS' &&
-    attempt.expires_at &&
-    attempt.expires_at <= new Date()
-  ) {
-    attempt.status = 'COMPLETED';
-    attempt.completed_at = attempt.expires_at;
-    // Score at completion — the leaderboard reads COMPLETED attempts
-    // directly, so an unscored completion would show up as 0.
-    const hack = await Hack.findById(attempt.hack);
-    if (hack) scoreAttempt(attempt, hack);
-    await attempt.save();
-    return true;
-  }
-  return false;
+const ATTEMPT_POPULATE = {
+  path: 'hack',
+  select: 'title course',
+  populate: { path: 'course', select: 'title' },
+};
+
+// The results page reads `test`, `totalAttempted` and `correctAnswers`, none
+// of which exist on the raw document.
+const shapeAttempt = (attempt) => {
+  const obj =
+    typeof attempt.toObject === 'function' ? attempt.toObject() : attempt;
+  const answers = obj.answers || [];
+
+  return {
+    ...obj,
+    test: obj.hack,
+    totalAttempted: answers.filter((a) => a.selected_option_id).length,
+    correctAnswers: answers.filter((a) => a.is_correct).length,
+  };
 };
 
 // @desc    Start a test attempt
@@ -50,7 +53,9 @@ export const startTest = asyncHandler(async (req, res) => {
       'This test has not started yet. Please wait for the scheduled start time.',
     );
   }
-  if (hack.end_time && now > new Date(hack.end_time)) {
+  // `>=`, not `>`: starting at exactly the close instant used to be allowed,
+  // and then got rounded up to a full minute of extra time past the window.
+  if (hack.end_time && now >= new Date(hack.end_time)) {
     throw new ApiError(
       403,
       'The scheduled time window for this test has ended.',
@@ -62,6 +67,13 @@ export const startTest = asyncHandler(async (req, res) => {
     hack: hack_id,
     status: 'IN_PROGRESS',
   });
+
+  // A stale IN_PROGRESS row is not a resumable attempt — close it out first so
+  // the one-attempt rule below counts it.
+  if (activeAttempt) {
+    const finalized = await finalizeIfExpired(activeAttempt);
+    if (finalized) activeAttempt = null;
+  }
 
   // Check if paid test requires purchase
   if (hack.access_type === 'paid') {
@@ -90,27 +102,35 @@ export const startTest = asyncHandler(async (req, res) => {
   }
 
   if (!activeAttempt) {
-    // Deadline for auto-submit. If the test has a scheduled end_time, clamp
-    // the attempt to it — a student starting late gets only the time
-    // remaining in the window, so no attempt runs past the window close.
-    let effectiveMinutes = hack.duration_minutes;
+    // Deadline for auto-submit, clamped exactly to the window close. The old
+    // Math.ceil(minutesUntilClose) rounded *up*, so every late start overran
+    // the window by up to 59 seconds; computing the two instants and taking
+    // the earlier one has no rounding drift at all.
+    let expiresAt = new Date(Date.now() + hack.duration_minutes * 60 * 1000);
     if (hack.end_time) {
-      const minutesUntilClose =
-        (new Date(hack.end_time).getTime() - Date.now()) / 60000;
-      effectiveMinutes = Math.max(
-        1,
-        Math.min(hack.duration_minutes, Math.ceil(minutesUntilClose)),
-      );
+      const windowClose = new Date(hack.end_time);
+      if (expiresAt > windowClose) expiresAt = windowClose;
     }
 
-    activeAttempt = await TestAttempt.create({
-      user: userId,
-      hack: hack_id,
-      started_at: new Date(),
-      expires_at: new Date(Date.now() + effectiveMinutes * 60 * 1000),
-      status: 'IN_PROGRESS',
-      answers: [],
-    });
+    try {
+      activeAttempt = await TestAttempt.create({
+        user: userId,
+        hack: hack_id,
+        started_at: new Date(),
+        expires_at: expiresAt,
+        status: 'IN_PROGRESS',
+        answers: [],
+      });
+    } catch (error) {
+      if (error?.code === 11000) {
+        activeAttempt = await TestAttempt.findOne({
+          user: userId,
+          hack: hack_id,
+          status: 'IN_PROGRESS',
+        });
+      }
+      if (!activeAttempt) throw error;
+    }
   }
 
   return res
@@ -153,37 +173,39 @@ export const saveAnswer = asyncHandler(async (req, res) => {
     selected_option_text = option.text;
   }
 
-  // Check if answer exists in snapshot
+  // Write through an atomic update guarded on IN_PROGRESS so an answer can
+  // never land on an attempt the sweeper has already finalized.
   const existingAnswerIndex = attempt.answers.findIndex(
     (a) => a.question_id.toString() === question_id,
   );
 
-  if (existingAnswerIndex !== -1) {
-    // Update Answer
-    attempt.answers[existingAnswerIndex].selected_option_id =
-      selected_option_id;
-    attempt.answers[existingAnswerIndex].selected_option_text =
-      selected_option_text;
-    attempt.answers[existingAnswerIndex].is_marked_for_review =
-      is_marked_for_review;
-    attempt.answers[existingAnswerIndex].answered_at = new Date();
-  } else {
-    // Save New Answer
-    attempt.answers.push({
-      question_id,
-      question_text: question.text,
-      selected_option_id,
-      selected_option_text,
-      is_marked_for_review,
-      answered_at: new Date(),
-    });
-  }
+  const answerDoc = {
+    question_id,
+    question_text: question.text,
+    selected_option_id: selected_option_id || null,
+    selected_option_text,
+    is_marked_for_review: Boolean(is_marked_for_review),
+    answered_at: new Date(),
+  };
 
-  await attempt.save();
+  const update =
+    existingAnswerIndex !== -1
+      ? { $set: { [`answers.${existingAnswerIndex}`]: answerDoc } }
+      : { $push: { answers: answerDoc } };
+
+  const updated = await TestAttempt.findOneAndUpdate(
+    { _id: attempt._id, status: 'IN_PROGRESS' },
+    update,
+    { new: true },
+  );
+
+  if (!updated) {
+    throw new ApiError(400, 'Time is up. The test has been auto-submitted.');
+  }
 
   return res
     .status(200)
-    .json(new ApiResponse(200, attempt.answers, 'Answer saved successfully'));
+    .json(new ApiResponse(200, updated.answers, 'Answer saved successfully'));
 });
 
 // @desc    Submit test manually
@@ -192,20 +214,30 @@ export const saveAnswer = asyncHandler(async (req, res) => {
 export const submitTest = asyncHandler(async (req, res) => {
   const { attemptId } = req.params;
 
-  const attempt = await TestAttempt.findOne({
+  const existing = await TestAttempt.findOne({
     _id: attemptId,
     user: req.user._id,
-    status: 'IN_PROGRESS',
   });
-  if (!attempt) throw new ApiError(404, 'Active test attempt not found');
+  if (!existing) throw new ApiError(404, 'Test attempt not found');
 
-  attempt.status = 'COMPLETED';
-  attempt.completed_at = new Date();
-  // Score at completion so the leaderboard never sees an unscored attempt;
-  // if the hack was deleted mid-attempt, still complete (score stays 0).
-  const hack = await Hack.findById(attempt.hack);
-  if (hack) scoreAttempt(attempt, hack);
-  await attempt.save();
+  // Idempotent: a duplicate click, or a submit that races the auto-submit
+  // sweeper, returns the finalized attempt instead of a 404.
+  if (existing.status !== 'IN_PROGRESS') {
+    return res
+      .status(200)
+      .json(new ApiResponse(200, existing, 'Test already submitted'));
+  }
+
+  // An attempt past its deadline is recorded as finishing *at* the deadline.
+  // submitTest used to skip the expiry check entirely and stamp completed_at
+  // with the current time, producing completions dated after their own expiry.
+  const isExpired = existing.expires_at && existing.expires_at <= new Date();
+
+  const finalized = await finalizeAttempt(existing._id, {
+    completedAt: isExpired ? existing.expires_at : new Date(),
+  });
+
+  const attempt = finalized || (await TestAttempt.findById(existing._id));
 
   return res
     .status(200)
@@ -216,36 +248,23 @@ export const submitTest = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/attempts/:attemptId
 // @access  Private/Student
 export const getAttempt = asyncHandler(async (req, res) => {
-  const attempt = await TestAttempt.findOne({
+  let attempt = await TestAttempt.findOne({
     _id: req.params.attemptId,
     user: req.user._id,
-  }).populate({
-    path: 'hack',
-    select: 'title course',
-    populate: { path: 'course', select: 'title' },
-  });
+  }).populate(ATTEMPT_POPULATE);
   if (!attempt) throw new ApiError(404, 'Attempt not found');
 
-  await finalizeIfExpired(attempt);
-
-  // Same shaping as getMyAttempts — the results page reads `test`,
-  // `totalAttempted`, and `correctAnswers`, none of which exist on the raw
-  // document.
-  const obj = attempt.toObject();
-  const totalAttempted = obj.answers ? obj.answers.length : 0;
-  const correctAnswers = obj.answers
-    ? obj.answers.filter((a) => a.is_correct).length
-    : 0;
+  // Re-read after a lazy finalize, otherwise the response would be built from
+  // the pre-scoring copy still held in memory.
+  if (await finalizeIfExpired(attempt)) {
+    attempt = await TestAttempt.findById(attempt._id).populate(
+      ATTEMPT_POPULATE,
+    );
+  }
 
   return res
     .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { ...obj, test: obj.hack, totalAttempted, correctAnswers },
-        'Attempt fetched',
-      ),
-    );
+    .json(new ApiResponse(200, shapeAttempt(attempt), 'Attempt fetched'));
 });
 
 // @desc    Evaluate test results
@@ -278,35 +297,28 @@ export const evaluateTest = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/attempts/my
 // @access  Private/Student
 export const getMyAttempts = asyncHandler(async (req, res) => {
+  // Close out anything that expired while the student was away. On serverless
+  // there is no sweeper at all, so this is the only thing that finalizes them.
+  const expired = await TestAttempt.find({
+    user: req.user._id,
+    status: 'IN_PROGRESS',
+    expires_at: { $lte: new Date() },
+  }).select('_id expires_at');
+
+  for (const stale of expired) {
+    await finalizeAttempt(stale._id, { completedAt: stale.expires_at });
+  }
+
   const attempts = await TestAttempt.find({ user: req.user._id })
     .sort({ completed_at: -1, started_at: -1 })
-    .populate({
-      path: 'hack',
-      select: 'title course',
-      populate: { path: 'course', select: 'title' },
-    });
-
-  const formattedAttempts = attempts.map((att) => {
-    const obj = att.toObject();
-    const totalAttempted = obj.answers ? obj.answers.length : 0;
-    const correctAnswers = obj.answers
-      ? obj.answers.filter((a) => a.is_correct).length
-      : 0;
-
-    return {
-      ...obj,
-      test: obj.hack,
-      totalAttempted,
-      correctAnswers,
-    };
-  });
+    .populate(ATTEMPT_POPULATE);
 
   return res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        { data: formattedAttempts },
+        { data: attempts.map(shapeAttempt) },
         'My attempts fetched successfully',
       ),
     );
@@ -316,41 +328,43 @@ export const getMyAttempts = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/attempts
 // @access  Private/Admin
 export const getAllAttempts = asyncHandler(async (req, res) => {
-  const attempts = await TestAttempt.find()
-    .sort({ started_at: -1 })
-    .populate({
-      path: 'user',
-      select: 'full_name email',
-    })
-    .populate({
-      path: 'hack',
-      select: 'title course duration_minutes total_marks',
-      populate: { path: 'course', select: 'title' },
-    });
+  const limit = Math.min(
+    Math.max(parseInt(req.query.limit, 10) || 100, 1),
+    500,
+  );
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const skip = (page - 1) * limit;
 
-  const formattedAttempts = attempts.map((att) => {
-    const obj = att.toObject();
-    const totalAttempted = obj.answers ? obj.answers.length : 0;
-    const correctAnswers = obj.answers
-      ? obj.answers.filter((a) => a.is_correct).length
-      : 0;
+  const [attempts, total] = await Promise.all([
+    TestAttempt.find()
+      .sort({ started_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate({ path: 'user', select: 'full_name email' })
+      .populate({
+        path: 'hack',
+        select: 'title course duration_minutes total_marks',
+        populate: { path: 'course', select: 'title' },
+      }),
+    TestAttempt.countDocuments(),
+  ]);
 
-    return {
-      ...obj,
-      test: obj.hack,
-      student: obj.user,
-      totalAttempted,
-      correctAnswers,
-    };
+  const formatted = attempts.map((att) => {
+    const shaped = shapeAttempt(att);
+    return { ...shaped, student: shaped.user };
   });
 
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { data: formattedAttempts },
-        'All attempts fetched successfully',
-      ),
-    );
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        data: formatted,
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit) || 1,
+      },
+      'All attempts fetched successfully',
+    ),
+  );
 });
