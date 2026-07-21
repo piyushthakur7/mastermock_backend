@@ -11,7 +11,7 @@
     "format": "prettier --write .",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "prepare": "husky install || exit 0",
+    "prepare": "husky install",
     "seed:categories": "node seedCategories.js",
     "migrate:audit": "node scripts/migrate-audit-fixes.js",
     "migrate:audit:apply": "node scripts/migrate-audit-fixes.js --apply",

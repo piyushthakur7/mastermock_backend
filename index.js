@@ -5,22 +5,6 @@ import connectdb from './src/db/connection.js';
 
 const PORT = env.PORT || process.env.PORT || 5000;
 
-// Without these, a failure anywhere outside a request handler kills the
-// process with nothing written to the log — the server just stops answering
-// and the reverse proxy serves a bare 503 with no way to tell why.
-process.on('unhandledRejection', (reason) => {
-  logger.error(
-    `UNHANDLED REJECTION: ${reason?.stack || reason?.message || reason}`,
-  );
-});
-
-process.on('uncaughtException', (error) => {
-  logger.error(`UNCAUGHT EXCEPTION: ${error?.stack || error?.message}`);
-  // An uncaught exception leaves the process in an undefined state, so exit
-  // and let the platform restart it — but only after the reason is recorded.
-  process.exit(1);
-});
-
 console.log('Application starting...');
 console.log('Connecting to MongoDB...');
 
@@ -37,8 +21,7 @@ connectdb()
   })
   .catch((err) => {
     console.error('MongoDB connection failed !!! ', err);
-    logger.error(`MongoDB connection failed: ${err?.stack || err?.message}`);
-    process.exit(1);
+    logger.error('MongoDB connection failed !!! ', err);
   });
 
 export default app;
