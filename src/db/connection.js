@@ -16,6 +16,12 @@ const connectdb = async () => {
     // driver's dbName option is authoritative regardless of URI shape.
     const connectionInstance = await mongoose.connect(env.MONGO_URI, {
       dbName: DB_NAME,
+      // Never build indexes automatically in production. Mongoose otherwise
+      // tries to create every declared index on boot: on a large collection
+      // that is slow and memory-hungry, and on data that violates a unique
+      // index it fails via an 'error' event the app never sees. Indexes are
+      // applied deliberately by scripts/migrate-audit-fixes.js instead.
+      autoIndex: env.NODE_ENV !== 'production',
     });
     logger.info(
       `MongoDB connected !! DB HOST: ${connectionInstance.connection.host} DB: ${connectionInstance.connection.name}`,
