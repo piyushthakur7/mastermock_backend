@@ -13,6 +13,10 @@
     "lint:fix": "eslint . --fix",
     "prepare": "husky install",
     "seed:categories": "node seedCategories.js",
+    "migrate:audit": "node scripts/migrate-audit-fixes.js",
+    "migrate:audit:apply": "node scripts/migrate-audit-fixes.js --apply",
+    "audit:files": "node scripts/audit-resource-files.js",
+    "audit:files:unpublish": "node scripts/audit-resource-files.js --unpublish",
     "test:e2e": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand --detectOpenHandles --forceExit"
   },
   "keywords": [],
@@ -27,6 +31,7 @@
     "express": "^4.19.2",
     "express-mongo-sanitize": "^2.2.0",
     "helmet": "^7.1.0",
+    "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^9.6.3",
     "mongoose-aggregate-paginate-v2": "^1.1.2",

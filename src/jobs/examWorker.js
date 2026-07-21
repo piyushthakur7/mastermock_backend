@@ -1,6 +1,6 @@
 import { TestAttempt } from '../models/testAttempt.model.js';
-import { Hack } from '../models/hack.model.js';
-import { scoreAttempt } from '../services/scoring.service.js';
+import { finalizeAttempt } from '../services/attempt.service.js';
+import { logger } from '../utils/logger.js';
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -12,6 +12,11 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
  * whose deadline has passed. Because the deadline lives in the database,
  * expired attempts survive server restarts (unlike an in-process timer)
  * and controllers can also enforce it lazily on access.
+ *
+ * Finalization goes through finalizeAttempt so the claim is atomic. The old
+ * loop loaded each document, mutated it and saved — a copy read just before a
+ * student's last answer landed would score without it and overwrite the
+ * correct total.
  */
 export const setupExamWorker = () => {
   // Serverless platforms kill idle processes, so an interval can't be
@@ -25,33 +30,34 @@ export const setupExamWorker = () => {
 
   const sweep = async () => {
     try {
+      // Only the identifiers are needed: finalizeAttempt re-reads the document
+      // as part of its atomic claim, so nothing here can go stale.
       const expired = await TestAttempt.find({
         status: 'IN_PROGRESS',
         expires_at: { $lte: new Date() },
-      });
+      }).select('_id expires_at');
+
       if (!expired.length) return;
 
-      // Attempts must be scored as they complete — the leaderboard reads
-      // COMPLETED attempts directly, so a bulk update without scoring would
-      // leave everyone auto-submitted stuck at 0. Cache hacks per sweep
-      // since many expired attempts usually belong to the same test.
-      const hackCache = new Map();
+      let finalized = 0;
       for (const attempt of expired) {
-        attempt.status = 'COMPLETED';
-        attempt.completed_at = attempt.expires_at;
-
-        const hackId = attempt.hack.toString();
-        if (!hackCache.has(hackId)) {
-          hackCache.set(hackId, await Hack.findById(hackId));
+        try {
+          const result = await finalizeAttempt(attempt._id, {
+            completedAt: attempt.expires_at,
+          });
+          if (result) finalized += 1;
+        } catch (err) {
+          logger.error(
+            `Auto-submit failed for attempt=${attempt._id}: ${err.message}`,
+          );
         }
-        const hack = hackCache.get(hackId);
-        if (hack) scoreAttempt(attempt, hack);
-
-        await attempt.save();
       }
-      console.log(`Auto-submitted ${expired.length} expired attempt(s)`);
+
+      if (finalized) {
+        logger.info(`Auto-submitted ${finalized} expired attempt(s)`);
+      }
     } catch (err) {
-      console.error('Auto-submit sweep failed:', err.message);
+      logger.error(`Auto-submit sweep failed: ${err.message}`);
     }
   };
 
@@ -59,6 +65,6 @@ export const setupExamWorker = () => {
   // otherwise the node process (and any test run) refuses to exit.
   const timer = setInterval(sweep, SWEEP_INTERVAL_MS);
   if (typeof timer.unref === 'function') timer.unref();
-  console.log('Exam auto-submit sweeper started');
+  logger.info('Exam auto-submit sweeper started');
   return timer;
 };
