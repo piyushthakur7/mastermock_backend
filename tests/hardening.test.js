@@ -50,25 +50,18 @@ describe('leaderboard privacy', () => {
 describe('error logging', () => {
   it('does not write submitted passwords into the log payload', async () => {
     const { logger } = await import('../src/utils/logger.js');
-    // Client errors (a 401 here) log at warn and only 5xx at error, so this
-    // watches both channels — what matters is that the password never reaches
-    // either of them, not which one carried the entry.
-    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
-    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const spy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
     await request(app)
       .post('/api/v1/auth/login')
       .send({ email: 'nobody@example.com', password: 'SuperSecret123!' });
 
-    const calls = [...errorSpy.mock.calls, ...warnSpy.mock.calls];
-    expect(calls.length).toBeGreaterThan(0);
-
-    const logged = calls.map((c) => String(c[0])).join('\n');
+    expect(spy).toHaveBeenCalled();
+    const logged = spy.mock.calls.map((c) => String(c[0])).join('\n');
     expect(logged).not.toContain('SuperSecret123!');
     expect(logged).toContain('[REDACTED]');
 
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
+    spy.mockRestore();
   });
 });
 

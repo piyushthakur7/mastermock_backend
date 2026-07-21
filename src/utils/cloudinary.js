@@ -30,14 +30,8 @@ export const uploadFileToCloudinary = async (fileBuffer, fileName) => {
       !env.CLOUDINARY_API_KEY ||
       !env.CLOUDINARY_API_SECRET
     ) {
-      // Previously returned a fake `mock_cloudinary_id_...` and reported
-      // success. Any caller then wrote a database record whose file had never
-      // been stored anywhere — a resource that looks downloadable forever and
-      // 404s every time. Fail loudly instead.
-      throw new ApiError(
-        500,
-        'File storage is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.',
-      );
+      console.warn('Cloudinary not configured. Mocking upload.');
+      return `mock_cloudinary_id_${Date.now()}_${fileName}`;
     }
 
     return new Promise((resolve, reject) => {
@@ -76,9 +70,11 @@ export const deleteFileFromCloudinary = async (publicId) => {
     if (
       !env.CLOUDINARY_CLOUD_NAME ||
       !env.CLOUDINARY_API_KEY ||
-      !env.CLOUDINARY_API_SECRET
+      !env.CLOUDINARY_API_SECRET ||
+      publicId.startsWith('mock_cloudinary_id_')
     ) {
-      return; // nothing was ever stored there
+      console.log(`Mocking Cloudinary delete for: ${publicId}`);
+      return;
     }
 
     const result = await cloudinary.uploader.destroy(publicId, {

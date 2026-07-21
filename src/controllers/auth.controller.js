@@ -3,43 +3,9 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { User } from '../models/user.model.js';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
-import { clearRateLimitKey } from '../middlewares/rateLimiter.middleware.js';
-
-const MAX_LOGIN_ATTEMPTS = 8;
-const LOCK_DURATION_MS = 15 * 60 * 1000;
-
-/**
- * A real bcrypt hash to compare against when no account matches.
- *
- * Returning 401 immediately for an unknown address while spending ~100ms on
- * bcrypt for a known one turned login into a user-enumeration oracle — the
- * careful anti-enumeration work on admin-login and forgot-password was
- * undone by the timing of this route.
- */
-const dummyHashPromise = bcrypt.hash('unused-placeholder-password', 10);
-
-const equaliseTiming = async (password) => {
-  try {
-    await bcrypt.compare(String(password || ''), await dummyHashPromise);
-  } catch {
-    /* timing padding only */
-  }
-};
-
-/** '15m' | '1d' | '10d' | '3600' -> milliseconds */
-const expiryToMs = (value, fallbackMs) => {
-  if (!value) return fallbackMs;
-  const match = String(value).match(/^(\d+)\s*([smhd])?$/i);
-  if (!match) return fallbackMs;
-  const amount = Number(match[1]);
-  const unit = (match[2] || 's').toLowerCase();
-  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
-  return amount * (multipliers[unit] || 1000);
-};
 
 const generateAccessAndRefreshTokens = async (userId) => {
   const user = await User.findById(userId);
@@ -52,59 +18,10 @@ const generateAccessAndRefreshTokens = async (userId) => {
   return { accessToken, refreshToken };
 };
 
-const baseCookieOptions = {
+const cookieOptions = {
   httpOnly: true,
   secure: env.NODE_ENV === 'production',
   sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-  path: '/',
-};
-
-// Without maxAge these were session cookies discarded on browser close, while
-// the JWTs inside them stayed valid for days — so "remember me" silently
-// never worked. Match each cookie to the lifetime of the token it carries.
-const accessCookieOptions = {
-  ...baseCookieOptions,
-  maxAge: expiryToMs(env.ACCESS_TOKEN_EXPIRY, 86400000),
-};
-const refreshCookieOptions = {
-  ...baseCookieOptions,
-  maxAge: expiryToMs(env.REFRESH_TOKEN_EXPIRY, 864000000),
-};
-
-const isLocked = (user) =>
-  Boolean(user.lockUntil && user.lockUntil.getTime() > Date.now());
-
-const registerFailedLogin = async (user) => {
-  const attempts = (user.loginAttempts || 0) + 1;
-
-  if (attempts >= MAX_LOGIN_ATTEMPTS) {
-    await User.updateOne(
-      { _id: user._id },
-      {
-        $set: {
-          loginAttempts: 0,
-          lockUntil: new Date(Date.now() + LOCK_DURATION_MS),
-        },
-      },
-    );
-    logger.warn(
-      `Account temporarily locked after ${MAX_LOGIN_ATTEMPTS} failed logins: user=${user._id}`,
-    );
-    return;
-  }
-
-  await User.updateOne(
-    { _id: user._id },
-    { $set: { loginAttempts: attempts } },
-  );
-};
-
-const clearLoginAttempts = async (user) => {
-  if (!user.loginAttempts && !user.lockUntil) return;
-  await User.updateOne(
-    { _id: user._id },
-    { $set: { loginAttempts: 0 }, $unset: { lockUntil: 1 } },
-  );
 };
 
 // @desc    Register a user
@@ -122,11 +39,6 @@ export const registerUser = asyncHandler(async (req, res) => {
     email,
     password_hash: password,
     phone_number,
-    // There is no email-verification flow yet, and nothing anywhere checks for
-    // 'unverified' — every account sat in that state forever while having full
-    // access, which made the status enum misleading. When verification lands,
-    // set this back to 'unverified' and add the verify endpoint.
-    status: 'active',
   });
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
@@ -139,8 +51,8 @@ export const registerUser = asyncHandler(async (req, res) => {
 
   return res
     .status(201)
-    .cookie('accessToken', accessToken, accessCookieOptions)
-    .cookie('refreshToken', refreshToken, refreshCookieOptions)
+    .cookie('accessToken', accessToken, cookieOptions)
+    .cookie('refreshToken', refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         201,
@@ -158,27 +70,14 @@ export const loginUser = asyncHandler(async (req, res) => {
   const user = await User.findOne({ email }).select('+password_hash');
 
   if (!user) {
-    await equaliseTiming(password);
     throw new ApiError(401, 'Invalid credentials');
-  }
-
-  if (isLocked(user)) {
-    throw new ApiError(
-      429,
-      'Too many failed login attempts. Please try again in a few minutes.',
-    );
   }
 
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    await registerFailedLogin(user);
     throw new ApiError(401, 'Invalid credentials');
   }
-
-  await clearLoginAttempts(user);
-  // A user who mistyped a few times then got in should not stay penalised.
-  await clearRateLimitKey(req, 'login');
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,
@@ -190,8 +89,8 @@ export const loginUser = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie('accessToken', accessToken, accessCookieOptions)
-    .cookie('refreshToken', refreshToken, refreshCookieOptions)
+    .cookie('accessToken', accessToken, cookieOptions)
+    .cookie('refreshToken', refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         200,
@@ -209,15 +108,7 @@ export const adminLogin = asyncHandler(async (req, res) => {
   const user = await User.findOne({ email }).select('+password_hash');
 
   if (!user) {
-    await equaliseTiming(password);
     throw new ApiError(401, 'Invalid credentials');
-  }
-
-  if (isLocked(user)) {
-    throw new ApiError(
-      429,
-      'Too many failed login attempts. Please try again in a few minutes.',
-    );
   }
 
   // Password first, role second. Checking the role first let anyone probe this
@@ -226,7 +117,6 @@ export const adminLogin = asyncHandler(async (req, res) => {
   const isPasswordValid = await user.isPasswordCorrect(password);
 
   if (!isPasswordValid) {
-    await registerFailedLogin(user);
     throw new ApiError(401, 'Invalid credentials');
   }
 
@@ -234,9 +124,6 @@ export const adminLogin = asyncHandler(async (req, res) => {
   if (user.role !== 'ADMIN') {
     throw new ApiError(403, 'Access denied. Only admins can use this login.');
   }
-
-  await clearLoginAttempts(user);
-  await clearRateLimitKey(req, 'admin-login');
 
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id,
@@ -248,8 +135,8 @@ export const adminLogin = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie('accessToken', accessToken, accessCookieOptions)
-    .cookie('refreshToken', refreshToken, refreshCookieOptions)
+    .cookie('accessToken', accessToken, cookieOptions)
+    .cookie('refreshToken', refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         200,
@@ -270,8 +157,8 @@ export const logoutUser = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .clearCookie('accessToken', baseCookieOptions)
-    .clearCookie('refreshToken', baseCookieOptions)
+    .clearCookie('accessToken', cookieOptions)
+    .clearCookie('refreshToken', cookieOptions)
     .json(new ApiResponse(200, {}, 'User logged out successfully'));
 });
 
@@ -291,38 +178,35 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Unauthorized request');
   }
 
-  let decodedToken;
   try {
-    decodedToken = jwt.verify(incomingRefreshToken, env.REFRESH_TOKEN_SECRET);
-  } catch {
-    throw new ApiError(401, 'Invalid refresh token. Please login again.');
-  }
-
-  const user = await User.findById(decodedToken?._id);
-
-  if (!user || incomingRefreshToken !== user.refresh_token) {
-    logger.warn(
-      `Refresh token mismatch for user: ${user?.email || decodedToken?._id}, IP: ${req.ip || 'unknown'}`,
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      env.REFRESH_TOKEN_SECRET,
     );
-    throw new ApiError(401, 'Invalid refresh token. Please login again.');
+    const user = await User.findById(decodedToken?._id);
+
+    if (!user || incomingRefreshToken !== user.refresh_token) {
+      logger.warn(
+        `Refresh token mismatch for user: ${user?.email || decodedToken?._id}, IP: ${req.ip || 'unknown'}`,
+      );
+      throw new ApiError(401, 'Invalid refresh token. Please login again.');
+    }
+
+    const accessToken = user.generateAccessToken();
+
+    return res
+      .status(200)
+      .cookie('accessToken', accessToken, cookieOptions)
+      .json(
+        new ApiResponse(
+          200,
+          { accessToken, refreshToken: incomingRefreshToken },
+          'Access token refreshed',
+        ),
+      );
+  } catch (error) {
+    throw new ApiError(401, error?.message || 'Invalid refresh token');
   }
-
-  if (user.status === 'suspended') {
-    throw new ApiError(403, 'Account is suspended');
-  }
-
-  const accessToken = user.generateAccessToken();
-
-  return res
-    .status(200)
-    .cookie('accessToken', accessToken, accessCookieOptions)
-    .json(
-      new ApiResponse(
-        200,
-        { accessToken, refreshToken: incomingRefreshToken },
-        'Access token refreshed',
-      ),
-    );
 });
 
 // @desc    Change Current Password
@@ -331,37 +215,18 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
   const { oldPassword, newPassword } = req.body;
   const user = await User.findById(req.user._id).select('+password_hash');
 
-  if (!user) throw new ApiError(404, 'User not found');
-
   const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
   if (!isPasswordCorrect) {
     throw new ApiError(400, 'Invalid old password');
-  }
-
-  if (oldPassword === newPassword) {
-    throw new ApiError(
-      400,
-      'The new password must be different from the current one',
-    );
   }
 
   user.password_hash = newPassword;
   user.refresh_token = undefined;
   await user.save({ validateBeforeSave: false });
 
-  // Changing a password must end other sessions, not just clear the stored
-  // refresh token on this document.
   return res
     .status(200)
-    .clearCookie('accessToken', baseCookieOptions)
-    .clearCookie('refreshToken', baseCookieOptions)
-    .json(
-      new ApiResponse(
-        200,
-        {},
-        'Password changed successfully. Please log in again.',
-      ),
-    );
+    .json(new ApiResponse(200, {}, 'Password changed successfully'));
 });
 
 // @desc    Forgot Password
@@ -373,7 +238,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   // Always answer the same way. A 404 for unknown addresses turned this
   // endpoint into a free "is this person registered?" oracle.
   if (user) {
-    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetToken = crypto.randomBytes(20).toString('hex');
 
     // Hash token to save in DB securely
     user.resetPasswordToken = crypto
@@ -409,10 +274,6 @@ export const resetPassword = asyncHandler(async (req, res) => {
   const { token } = req.params;
   const { password } = req.body;
 
-  if (!token || typeof token !== 'string') {
-    throw new ApiError(400, 'Invalid or expired reset token');
-  }
-
   const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
   const user = await User.findOne({
@@ -428,14 +289,9 @@ export const resetPassword = asyncHandler(async (req, res) => {
   user.resetPasswordToken = undefined;
   user.resetPasswordExpire = undefined;
   user.refresh_token = undefined;
-  // A successful reset also clears any brute-force lock.
-  user.loginAttempts = 0;
-  user.lockUntil = undefined;
   await user.save({ validateBeforeSave: false });
 
   return res
     .status(200)
-    .clearCookie('accessToken', baseCookieOptions)
-    .clearCookie('refreshToken', baseCookieOptions)
     .json(new ApiResponse(200, {}, 'Password reset successfully'));
 });

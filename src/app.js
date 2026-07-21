@@ -83,13 +83,9 @@ import inquiryRouter from './routes/inquiry.routes.js';
 import { setupSwagger } from './swagger.js';
 import { auditLogger } from './middlewares/audit.middleware.js';
 import { setupExamWorker } from './jobs/examWorker.js';
-import { setupPaymentReconciler } from './jobs/paymentReconciler.js';
 
 // --- INITIALIZE BACKGROUND JOBS ---
 setupExamWorker();
-// Settles payments the browser never came back to confirm, and repairs any
-// whose access provisioning failed partway through.
-setupPaymentReconciler();
 
 // --- ROUTES DECLARATION ---
 app.use('/api/v1/healthcheck', healthcheckRouter);

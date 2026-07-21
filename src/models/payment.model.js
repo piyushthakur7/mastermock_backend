@@ -22,7 +22,7 @@ const paymentSchema = new Schema(
     item_type: {
       type: String,
       required: true,
-      enum: ['Course', 'Hack', 'Resource'],
+      enum: ['Course', 'Hack'],
     },
     status: {
       type: String,
@@ -30,22 +30,6 @@ const paymentSchema = new Schema(
       default: 'PENDING',
       index: true,
     },
-
-    // Set once Purchase (and, for a Course, Enrollment) provisioning has
-    // completed. A SUCCESS payment with this still unset means "money taken,
-    // access not yet granted" — previously an unrecoverable state, because
-    // both verifyPayment and getPaymentStatus short-circuited on SUCCESS and
-    // never re-ran provisioning. Every read path now repairs it.
-    access_granted_at: { type: Date },
-
-    // Refund bookkeeping. The REFUNDED enum value existed but nothing in the
-    // codebase could ever set it.
-    razorpay_refund_id: { type: String },
-    refund_amount: { type: Number },
-    refunded_at: { type: Date },
-    refund_reason: { type: String },
-
-    failure_reason: { type: String },
   },
   { timestamps: true },
 );
@@ -54,17 +38,5 @@ paymentSchema.plugin(mongooseAggregatePaginate);
 
 // Compound index for idempotency checks during order creation
 paymentSchema.index({ user: 1, item_id: 1, status: 1 });
-
-// At most one open order per user+item. Without this, a second "Buy" click
-// after the 5-minute idempotency window minted a second Razorpay order for the
-// same item — and a user who paid both was charged twice with no refund path.
-paymentSchema.index(
-  { user: 1, item_id: 1, item_type: 1 },
-  { unique: true, partialFilterExpression: { status: 'PENDING' } },
-);
-
-// Finds SUCCESS payments whose provisioning never completed, for the repair
-// sweep and for support tooling.
-paymentSchema.index({ status: 1, access_granted_at: 1 });
 
 export const Payment = mongoose.model('Payment', paymentSchema);

@@ -5,7 +5,6 @@ import {
   getAllResources,
   getCourseResources,
   downloadResource,
-  getStorageStatus,
 } from '../controllers/resource.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/role.middleware.js';
@@ -15,20 +14,18 @@ import { createResourceSchema } from '../validators/resource.validator.js';
 
 const router = Router();
 
+// Apply verifyJWT to all other routes
 router.use(verifyJWT);
 
-// Student routes. Paid resources are gated inside downloadResource.
+// Student routes — all PDFs are free for logged-in users
 router.route('/').get(getAllResources);
 router.route('/course/:courseId').get(getCourseResources);
 router.route('/:id/download').get(downloadResource);
 
 // Admin routes
-// Registered before the `/:id` matcher so the literal path is not swallowed.
-router.route('/storage-status').get(authorizeRoles('ADMIN'), getStorageStatus);
-
 router.use(authorizeRoles('ADMIN'));
 
-// Multer runs first so the multipart body is parsed before validation.
+// We need a custom middleware flow to use multer first, then parse/validate the body
 router
   .route('/')
   .post(upload.single('file'), validate(createResourceSchema), uploadResource);

@@ -27,13 +27,6 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().optional().default(''),
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
-  // Zod strips keys it does not declare, so an undeclared REDIS_URL was
-  // unreachable as env.REDIS_URL no matter what .env contained — the rate
-  // limiter silently fell back to its in-process Map forever.
-  REDIS_URL: z.string().optional().default(''),
-  LOG_LEVEL: z
-    .enum(['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'])
-    .optional(),
 });
 
 // The token secrets have development defaults so a fresh clone runs without
@@ -104,22 +97,5 @@ if (!_env.data.RAZORPAY_KEY_ID || !_env.data.RAZORPAY_KEY_SECRET) {
 if (!_env.data.RAZORPAY_WEBHOOK_SECRET) {
   console.warn(
     '⚠️  RAZORPAY_WEBHOOK_SECRET is not set. Webhook verification will fail.',
-  );
-}
-
-// Uploaded files go to a local `uploads/` directory unless a cloud store is
-// configured. On any host that rebuilds the filesystem on deploy, that
-// directory is erased while the database records survive — the catalogue then
-// advertises PDFs whose bytes are gone and every download 404s.
-if (
-  !_env.data.CLOUDINARY_CLOUD_NAME ||
-  !_env.data.CLOUDINARY_API_KEY ||
-  !_env.data.CLOUDINARY_API_SECRET
-) {
-  console.warn(
-    '⚠️  No cloud file storage configured — uploads are written to local disk\n' +
-      '   and WILL BE LOST on the next redeploy or container restart.\n' +
-      '   Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.\n' +
-      '   Check existing damage with: npm run audit:files',
   );
 }

@@ -1,14 +1,12 @@
 import { z } from 'zod';
-import { optionalPhoneNumber } from './auth.validator.js';
 
 export const updateAccountSchema = z.object({
   full_name: z
     .string()
-    .trim()
     .min(2, 'Name must be at least 2 characters')
     .max(50)
     .optional(),
-  phone_number: optionalPhoneNumber,
+  phone_number: z.string().optional(),
 });
 
 export const updateAvatarSchema = z.object({

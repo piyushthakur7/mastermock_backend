@@ -5,10 +5,9 @@ const categorySchema = new Schema(
     name: {
       type: String,
       required: true,
-      // `unique` builds the index on its own; the extra `index: true` only
-      // produced a duplicate-index warning at boot.
       unique: true,
       trim: true,
+      index: true,
     },
     description: {
       type: String,

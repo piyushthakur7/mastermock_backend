@@ -1,24 +1,15 @@
+import mongoose from 'mongoose';
 import { Hack } from '../models/hack.model.js';
 import { Purchase } from '../models/purchase.model.js';
-import { TestAttempt } from '../models/testAttempt.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-
-// total_marks / total_questions are derived from the question list by a
-// pre-save hook. Accepting them from the client would let an admin re-base
-// every student's percentage by hand.
-const stripDerivedFields = (body = {}) => {
-  // eslint-disable-next-line no-unused-vars
-  const { total_marks, total_questions, ...rest } = body;
-  return rest;
-};
 
 // --- HACK ADMIN ---
 
 export const createHack = asyncHandler(async (req, res) => {
   const hack = await Hack.create({
-    ...stripDerivedFields(req.body),
+    ...req.body,
     created_by: req.user._id,
   });
   return res
@@ -29,7 +20,7 @@ export const createHack = asyncHandler(async (req, res) => {
 export const updateHack = asyncHandler(async (req, res) => {
   const hack = await Hack.findOneAndUpdate(
     { _id: req.params.id, isDeleted: false },
-    { $set: stripDerivedFields(req.body) },
+    { $set: req.body },
     { new: true, runValidators: true },
   );
   if (!hack) throw new ApiError(404, 'Hack not found');
@@ -41,7 +32,7 @@ export const updateHack = asyncHandler(async (req, res) => {
 export const deleteHack = asyncHandler(async (req, res) => {
   const hack = await Hack.findOneAndUpdate(
     { _id: req.params.id, isDeleted: false },
-    { $set: { isDeleted: true, deletedAt: new Date(), is_active: false } },
+    { $set: { isDeleted: true, deletedAt: new Date() } },
     { new: true },
   );
   if (!hack) throw new ApiError(404, 'Hack not found');
@@ -51,39 +42,12 @@ export const deleteHack = asyncHandler(async (req, res) => {
 });
 
 export const publishHack = asyncHandler(async (req, res) => {
-  const hack = await Hack.findOne({ _id: req.params.id, isDeleted: false });
-  if (!hack) throw new ApiError(404, 'Hack not found');
-
-  // Publishing is the last point at which these problems are cheap to fix.
-  // Afterwards they become wrong scores on real attempts.
-  if (!hack.questions.length) {
-    throw new ApiError(400, 'Cannot publish a test that has no questions');
-  }
-
-  const unanswerable = hack.questions.filter(
-    (q) => !(q.options || []).some((o) => o.is_correct),
+  const hack = await Hack.findOneAndUpdate(
+    { _id: req.params.id, isDeleted: false },
+    { $set: { is_active: true } },
+    { new: true },
   );
-  if (unanswerable.length) {
-    throw new ApiError(
-      400,
-      `Cannot publish: ${unanswerable.length} question(s) have no correct option marked, so nobody can answer them correctly`,
-    );
-  }
-
-  if (hack.passing_marks > hack.total_marks) {
-    throw new ApiError(
-      400,
-      `Cannot publish: passing marks (${hack.passing_marks}) exceed the total marks available (${hack.total_marks})`,
-    );
-  }
-
-  if (hack.access_type === 'paid' && !(hack.price > 0)) {
-    throw new ApiError(400, 'Cannot publish a paid test with no price set');
-  }
-
-  hack.is_active = true;
-  await hack.save();
-
+  if (!hack) throw new ApiError(404, 'Hack not found');
   return res
     .status(200)
     .json(new ApiResponse(200, hack, 'Hack published successfully'));
@@ -124,88 +88,44 @@ export const addQuestion = asyncHandler(async (req, res) => {
     );
 });
 
-/**
- * Pair incoming options with the ones already stored so their _id survives.
- *
- * Replacing the array wholesale made Mongoose mint a fresh ObjectId for every
- * option. Completed attempts snapshot the option _id the student selected, so
- * after any edit — even a typo fix — none of those ids resolved against the
- * question any more, and the next re-score wiped the student's result (and,
- * with negative marking on, actively deducted marks).
- *
- * Matching prefers an explicit _id, then identical text (which survives a
- * reorder), and finally position.
- */
-const reconcileOptionIds = (incomingOptions = [], existingOptions = []) => {
-  const byId = new Map(existingOptions.map((o) => [o._id.toString(), o]));
-  const claimed = new Set();
-
-  return incomingOptions.map((incoming, index) => {
-    let match = null;
-
-    if (incoming._id && byId.has(String(incoming._id))) {
-      match = byId.get(String(incoming._id));
-    }
-    if (!match) {
-      match = existingOptions.find(
-        (o) => !claimed.has(o._id.toString()) && o.text === incoming.text,
-      );
-    }
-    if (!match) {
-      const positional = existingOptions[index];
-      if (positional && !claimed.has(positional._id.toString())) {
-        match = positional;
-      }
-    }
-    if (match) claimed.add(match._id.toString());
-
-    return {
-      ...(match ? { _id: match._id } : {}),
-      text: incoming.text,
-      is_correct: incoming.is_correct,
-    };
-  });
-};
-
 export const updateQuestion = asyncHandler(async (req, res) => {
   const { id, questionId } = req.params;
 
-  const hack = await Hack.findOne({ _id: id, isDeleted: false });
-  if (!hack) throw new ApiError(404, 'Hack not found');
+  const hack = await Hack.findOneAndUpdate(
+    { _id: id, 'questions._id': questionId, isDeleted: false },
+    {
+      $set: {
+        'questions.$.text': req.body.text,
+        'questions.$.marks': req.body.marks,
+        'questions.$.explanation': req.body.explanation,
+        'questions.$.options': req.body.options,
+      },
+    },
+    { new: true },
+  );
 
-  const question = hack.questions.id(questionId);
-  if (!question) throw new ApiError(404, 'Hack or Question not found');
+  if (!hack) throw new ApiError(404, 'Hack or Question not found');
 
-  question.text = req.body.text;
-  question.marks = req.body.marks;
-  question.explanation = req.body.explanation;
-  question.options = reconcileOptionIds(req.body.options, question.options);
-
-  // save() (not findOneAndUpdate) so the totals hook recomputes total_marks.
-  await hack.save();
-
+  const updatedQuestion = hack.questions.find(
+    (q) => q._id.toString() === questionId,
+  );
   return res
     .status(200)
     .json(
-      new ApiResponse(
-        200,
-        hack.questions.id(questionId),
-        'Question updated successfully',
-      ),
+      new ApiResponse(200, updatedQuestion, 'Question updated successfully'),
     );
 });
 
 export const deleteQuestion = asyncHandler(async (req, res) => {
   const { id, questionId } = req.params;
 
-  const hack = await Hack.findOne({ _id: id, isDeleted: false });
+  const hack = await Hack.findOneAndUpdate(
+    { _id: id, isDeleted: false },
+    { $pull: { questions: { _id: questionId } } },
+    { new: true },
+  );
+
   if (!hack) throw new ApiError(404, 'Hack not found');
-
-  const question = hack.questions.id(questionId);
-  if (!question) throw new ApiError(404, 'Question not found');
-
-  hack.questions.pull(questionId);
-  await hack.save();
 
   return res
     .status(200)
@@ -236,8 +156,7 @@ export const bulkUploadQuestions = asyncHandler(async (req, res) => {
 export const getScheduleStatus = (hack, now = new Date()) => {
   if (!hack.start_time && !hack.end_time) return 'unscheduled';
   if (hack.start_time && now < new Date(hack.start_time)) return 'upcoming';
-  // `>=` matches startTest: the instant the window closes, it is closed.
-  if (hack.end_time && now >= new Date(hack.end_time)) return 'ended';
+  if (hack.end_time && now > new Date(hack.end_time)) return 'ended';
   return 'live';
 };
 
@@ -274,11 +193,9 @@ export const getHacks = asyncHandler(async (req, res) => {
     .select(isAdmin ? '' : '-questions.options.is_correct -created_by')
     .sort({ createdAt: -1 });
 
-  const limit = Math.min(
-    Math.max(parseInt(req.query.limit, 10) || 200, 1),
-    500,
-  );
-  query = query.limit(limit);
+  if (req.query.limit) {
+    query = query.limit(parseInt(req.query.limit, 10));
+  }
 
   const hacks = await query;
 
@@ -296,13 +213,14 @@ export const getHacks = asyncHandler(async (req, res) => {
 });
 
 export const getHackById = asyncHandler(async (req, res) => {
-  const isAdmin = req.user?.role === 'ADMIN';
   const filter = { _id: req.params.id, isDeleted: false };
-  if (!isAdmin) filter.is_active = true;
+  if (!req.user || req.user.role !== 'ADMIN') filter.is_active = true;
 
   const hack = await Hack.findOne(filter).select(
-    isAdmin ? '' : '-questions.options.is_correct -created_by',
-  );
+    req.user?.role !== 'ADMIN'
+      ? '-questions.options.is_correct -created_by'
+      : '',
+  ); // Hide answers (and the author's user id) unless admin
 
   if (!hack) throw new ApiError(404, 'Hack not found');
 
@@ -346,17 +264,6 @@ export const checkAccess = asyncHandler(async (req, res) => {
 
   if (!hack) throw new ApiError(404, 'Hack not found');
 
-  // A live attempt is always resumable, whatever the one-attempt rule says.
-  // Reporting "already attempted" for a student who is mid-test — which is
-  // what happened on any page refresh — locked them out of their own paper
-  // even though startTest would have handed the attempt straight back.
-  const activeAttempt = await TestAttempt.findOne({
-    user: req.user._id,
-    hack: hack._id,
-    status: 'IN_PROGRESS',
-    expires_at: { $gt: new Date() },
-  }).select('_id expires_at');
-
   let hasAccess = false;
   let reason = '';
   let attemptExhausted = false;
@@ -375,15 +282,12 @@ export const checkAccess = asyncHandler(async (req, res) => {
 
     if (purchase) {
       hasPurchased = true;
-      const attemptCount = await TestAttempt.countDocuments({
+      const attemptCount = await mongoose.model('TestAttempt').countDocuments({
         user: req.user._id,
         hack: hack._id,
       });
 
-      if (activeAttempt) {
-        hasAccess = true;
-        reason = 'Resuming your in-progress attempt';
-      } else if (attemptCount >= 1) {
+      if (attemptCount >= 1) {
         hasAccess = false;
         attemptExhausted = true;
         reason = 'Paid test already attempted (One-time attempt only)';
@@ -421,8 +325,6 @@ export const checkAccess = asyncHandler(async (req, res) => {
         reason,
         attempt_exhausted: attemptExhausted,
         has_purchased: hasPurchased,
-        has_active_attempt: Boolean(activeAttempt),
-        active_attempt_id: activeAttempt?._id || null,
         schedule_status: scheduleStatus,
         start_time: hack.start_time || null,
         end_time: hack.end_time || null,

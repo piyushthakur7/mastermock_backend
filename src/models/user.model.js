@@ -14,25 +14,16 @@ const userSchema = new Schema(
     email: {
       type: String,
       required: true,
-      // `unique` already builds the index; adding `index: true` as well made
-      // Mongoose warn about a duplicate index definition on every boot.
       unique: true,
       lowercase: true,
       trim: true,
+      index: true,
     },
     phone_number: {
       type: String,
       unique: true,
       sparse: true,
       trim: true,
-      // A sparse unique index skips only *missing* values — an empty string is
-      // still indexed. Two users submitting a blank phone field therefore
-      // collided on E11000 and the second registration failed outright.
-      // Normalise blank to undefined so `sparse` actually applies.
-      set: (v) =>
-        v === '' || v === null || (typeof v === 'string' && v.trim() === '')
-          ? undefined
-          : v,
     },
     password_hash: {
       type: String,
