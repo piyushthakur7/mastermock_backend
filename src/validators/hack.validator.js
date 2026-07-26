@@ -17,7 +17,13 @@ const baseHackSchema = z.object({
   total_questions: z.number().min(1),
   passing_marks: z.number().min(1),
   negative_marking: z.boolean().default(false),
-  negative_marks_per_wrong: z.number().min(0).default(0),
+  // Stored as a magnitude and subtracted by the scorer. Admins routinely type
+  // "-0.25" into a field labelled "negative marks", which used to be rejected
+  // outright by .min(0); normalise the sign instead of failing the request.
+  negative_marks_per_wrong: z
+    .number()
+    .transform((n) => Math.abs(n))
+    .default(0),
   total_marks: z.number().min(1),
   duration_minutes: z.number().min(1),
   // Scheduled window. Validation replaces req.body with the parsed result, so

@@ -237,15 +237,72 @@ export const getAttempt = asyncHandler(async (req, res) => {
     ? obj.answers.filter((a) => a.is_correct).length
     : 0;
 
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { ...obj, test: obj.hack, totalAttempted, correctAnswers },
-        'Attempt fetched',
-      ),
+  // Release the answer key, but ONLY for a finished attempt.
+  //
+  // Every hack endpoint strips `questions.options.is_correct` for students,
+  // because GET /hacks/:id is what the live exam screen loads — leaving the
+  // key in there would let a candidate read it out of the network tab
+  // mid-test. That strip also left the results page with no way to show the
+  // right answer, so it could only ever highlight the student's own choice.
+  // Once the attempt is COMPLETED there is nothing left to cheat on, so this
+  // hands back the full question set: every option, which one is correct, and
+  // the explanation. Unanswered questions are included too — the answers array
+  // only holds questions the student actually touched.
+  let solutions = null;
+  if (obj.status === 'COMPLETED') {
+    const hackWithKey = await Hack.findById(obj.hack?._id || obj.hack).select(
+      'questions',
     );
+
+    if (hackWithKey) {
+      solutions = hackWithKey.questions.map((q) => {
+        const correctOption = q.options.find((o) => o.is_correct);
+        return {
+          _id: q._id,
+          text: q.text,
+          marks: q.marks,
+          explanation: q.explanation,
+          options: q.options.map((o) => ({
+            _id: o._id,
+            text: o.text,
+            is_correct: o.is_correct,
+          })),
+          correct_option_id: correctOption ? correctOption._id : null,
+          correct_option_text: correctOption ? correctOption.text : null,
+        };
+      });
+
+      // Denormalise the key onto each saved answer as well, so a client that
+      // reads the answers array alone still knows what the right choice was.
+      const byQuestionId = new Map(solutions.map((q) => [q._id.toString(), q]));
+      obj.answers = (obj.answers || []).map((a) => {
+        const q = byQuestionId.get(a.question_id?.toString());
+        return q
+          ? {
+              ...a,
+              correct_option_id: q.correct_option_id,
+              correct_option_text: q.correct_option_text,
+              explanation: q.explanation,
+            }
+          : a;
+      });
+    }
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        ...obj,
+        test: obj.hack,
+        totalAttempted,
+        correctAnswers,
+        // Present only on a COMPLETED attempt.
+        ...(solutions ? { questions: solutions } : {}),
+      },
+      'Attempt fetched',
+    ),
+  );
 });
 
 // @desc    Evaluate test results

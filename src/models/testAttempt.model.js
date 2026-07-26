@@ -8,6 +8,10 @@ const answerSnapshotSchema = new Schema(
     selected_option_id: { type: Schema.Types.ObjectId },
     selected_option_text: { type: String },
     is_correct: { type: Boolean, default: false },
+    // Signed contribution of this answer to the total: +question.marks when
+    // correct, -negative_marks_per_wrong when wrong, 0 when unattempted.
+    // Lets the result page show a breakdown that actually sums to the score.
+    marks_awarded: { type: Number, default: 0 },
     is_marked_for_review: { type: Boolean, default: false },
     answered_at: { type: Date },
   },
@@ -41,6 +45,8 @@ const testAttemptSchema = new Schema(
 
     answers: [answerSnapshotSchema],
 
+    // Signed. With negative marking a score below zero is a legitimate result
+    // and must never be floored — see scoring.service.js.
     score: { type: Number, default: 0 },
     percentage: { type: Number, default: 0 },
     rank: { type: Number },

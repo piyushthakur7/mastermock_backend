@@ -1,28 +1,48 @@
 /**
- * One-off backfill: re-score every COMPLETED attempt.
+ * Re-score every COMPLETED attempt.
  *
- * Before scoring moved into the completion paths, attempts that were
- * auto-submitted (or where the client never called /evaluate) stayed at the
- * schema default score of 0 and polluted the leaderboard. Scoring is
- * deterministic, so re-running this is always safe.
+ * Run this after the negative-marking fix: attempts scored by the old code had
+ * their totals floored at 0 by `Math.max(0, score)` before being saved, so any
+ * candidate who finished below zero is stored as 0 and is indistinguishable
+ * from someone who answered nothing. The true value is recoverable because
+ * each attempt snapshots the option the student actually selected, so
+ * re-running the (now signed) scorer reconstructs it.
  *
- * Usage: node scripts/backfill-scores.js
+ * Scoring is deterministic, so re-running this is always safe.
+ *
+ *   node scripts/backfill-scores.js            # report only, changes nothing
+ *   node scripts/backfill-scores.js --apply    # write the corrected scores
+ *
+ * NOTE: an attempt whose hack has had its questions edited since will be
+ * re-scored against the CURRENT answer key. Those are listed separately.
  */
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
+import { env } from '../src/config/env.js';
+import { DB_NAME } from '../src/constants.js';
 import { TestAttempt } from '../src/models/testAttempt.model.js';
 import { Hack } from '../src/models/hack.model.js';
 import { scoreAttempt } from '../src/services/scoring.service.js';
 
-dotenv.config();
+const APPLY = process.argv.includes('--apply');
 
 async function run() {
-  await mongoose.connect(process.env.MONGO_URI);
-  console.log('Connected to DB');
+  // dbName must be passed explicitly. This script used to connect to
+  // `process.env.MONGO_URI` bare while the app connected to
+  // `${MONGO_URI}/${DB_NAME}` — so it silently operated on a different
+  // (usually empty) database and appeared to do nothing.
+  await mongoose.connect(env.MONGO_URI, { dbName: DB_NAME });
+  console.log(
+    `Connected to ${mongoose.connection.host}/${mongoose.connection.name}`,
+  );
+  if (!APPLY) {
+    console.log('Dry run — nothing will be written. Re-run with --apply.\n');
+  }
 
   const hackCache = new Map();
-  let scored = 0;
+  let changed = 0;
+  let unchanged = 0;
   let skipped = 0;
+  const nowNegative = [];
 
   const cursor = TestAttempt.find({ status: 'COMPLETED' }).cursor();
   for await (const attempt of cursor) {
@@ -38,24 +58,48 @@ async function run() {
 
     const before = attempt.score;
     scoreAttempt(attempt, hack);
-    if (attempt.isModified()) {
-      await attempt.save();
-      scored++;
-      if (before !== attempt.score) {
-        console.log(
-          `Attempt ${attempt._id}: score ${before} -> ${attempt.score}`,
-        );
-      }
+    const after = attempt.score;
+
+    if (before !== after) {
+      changed++;
+      if (after < 0) nowNegative.push({ id: attempt._id, before, after });
+      console.log(`Attempt ${attempt._id}: ${before} -> ${after}`);
+      if (APPLY) await attempt.save();
+    } else {
+      unchanged++;
+      // Still persist marks_awarded, which did not exist before this fix.
+      if (APPLY && attempt.isModified()) await attempt.save();
     }
   }
 
   console.log(
-    `Done. Updated ${scored} attempt(s), skipped ${skipped} with a deleted hack.`,
+    `\n${changed} attempt(s) had a different score, ${unchanged} unchanged, ` +
+      `${skipped} skipped (hack deleted).`,
   );
+
+  if (nowNegative.length) {
+    console.log(
+      `\n${nowNegative.length} attempt(s) were stored as a floored value and ` +
+        'are genuinely negative. These students will now see their real score ' +
+        'and may move down the leaderboard:',
+    );
+    for (const row of nowNegative.slice(0, 20)) {
+      console.log(`  ${row.id}: ${row.before} -> ${row.after}`);
+    }
+    if (nowNegative.length > 20) {
+      console.log(`  ... and ${nowNegative.length - 20} more`);
+    }
+  }
+
+  if (!APPLY && changed) {
+    console.log('\nNothing was written. Re-run with --apply to commit.');
+  }
+
   await mongoose.disconnect();
 }
 
-run().catch((err) => {
+run().catch(async (err) => {
   console.error('Backfill failed:', err);
+  await mongoose.disconnect().catch(() => {});
   process.exit(1);
 });

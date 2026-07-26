@@ -1501,9 +1501,21 @@ Base Path: `/api/v1/attempts`
 
 🔒 **Auth Required**
 
-**Description:** Get a specific test attempt by ID.
+**Description:** Get a specific test attempt by ID. Only the owner of the attempt can read it.
 
 **Success Response (200):** Returns the full test attempt object.
+
+Once `status` is `COMPLETED`, the response additionally carries the **answer key** so the results screen can show the solution:
+
+- `questions[]` — every question on the test (including ones the student never answered, which `answers[]` omits), each with:
+  - `options[]` with `is_correct` **not** stripped
+  - `correct_option_id` / `correct_option_text`
+  - `explanation`
+- `answers[]` — each saved answer gains `correct_option_id`, `correct_option_text` and `explanation`
+
+While the attempt is `IN_PROGRESS` the `questions` field is absent entirely.
+
+> ⚠️ The answer key is still stripped from every `/hacks` endpoint for STUDENT users. That strip is what stops a candidate reading the key out of the network tab **during** the exam; this endpoint releases it only once the attempt is finished.
 
 ---
 

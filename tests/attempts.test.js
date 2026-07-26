@@ -132,8 +132,10 @@ describe('attempt lifecycle', () => {
       .post(`/api/v1/attempts/${attemptId}/evaluate`)
       .set(auth(student.token));
 
-    // Clamped at zero rather than going negative.
-    expect(res.body.data.score).toBe(0);
+    // Goes genuinely negative. This previously asserted 0 because the scorer
+    // floored the total, which erased the very penalty the test was configured
+    // to apply — "answered one wrong" and "answered nothing" both read 0.00.
+    expect(res.body.data.score).toBe(-1);
   });
 });
 
@@ -238,5 +240,116 @@ describe('paid tests require a purchase', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.message).toMatch(/purchase/i);
+  });
+});
+
+describe('GET /api/v1/attempts/:id — answer key release', () => {
+  const twoQuestionHack = (createdBy) =>
+    makeHack(createdBy, {
+      questions: [
+        {
+          text: 'What is 2 + 2?',
+          marks: 2,
+          explanation: 'Two and two make four.',
+          options: [
+            { text: '3', is_correct: false },
+            { text: '4', is_correct: true },
+          ],
+        },
+        {
+          text: 'Capital of India?',
+          marks: 2,
+          options: [
+            { text: 'Mumbai', is_correct: false },
+            { text: 'New Delhi', is_correct: true },
+          ],
+        },
+      ],
+    });
+
+  it('withholds the key while the attempt is still IN_PROGRESS', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await twoQuestionHack(admin.user._id);
+
+    const started = await startAttempt(student, hack);
+    const res = await request(app)
+      .get(`/api/v1/attempts/${started.body.data._id}`)
+      .set(auth(student.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('IN_PROGRESS');
+    expect(res.body.data.questions).toBeUndefined();
+  });
+
+  it('returns every question, option and the correct answer once COMPLETED', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await twoQuestionHack(admin.user._id);
+    const [q1, q2] = hack.questions;
+    const wrong = q1.options.find((o) => !o.is_correct);
+
+    const started = await startAttempt(student, hack);
+    const attemptId = started.body.data._id;
+
+    // Answer the first question wrongly, skip the second entirely.
+    await request(app)
+      .put(`/api/v1/attempts/${attemptId}/answer`)
+      .set(auth(student.token))
+      .send({
+        question_id: q1._id.toString(),
+        selected_option_id: wrong._id.toString(),
+      });
+
+    await request(app)
+      .post(`/api/v1/attempts/${attemptId}/submit`)
+      .set(auth(student.token));
+
+    const res = await request(app)
+      .get(`/api/v1/attempts/${attemptId}`)
+      .set(auth(student.token));
+
+    expect(res.status).toBe(200);
+    const questions = res.body.data.questions;
+
+    // The skipped question is present too — answers[] only holds what the
+    // student touched, so the review would otherwise be missing a question.
+    expect(questions).toHaveLength(2);
+    expect(res.body.data.answers).toHaveLength(1);
+
+    const first = questions.find((q) => q._id === q1._id.toString());
+    expect(first.options).toHaveLength(2);
+    expect(first.correct_option_id).toBe(
+      q1.options.find((o) => o.is_correct)._id.toString(),
+    );
+    expect(first.correct_option_text).toBe('4');
+    expect(first.explanation).toBe('Two and two make four.');
+    expect(first.options.find((o) => o.text === '4').is_correct).toBe(true);
+    expect(first.options.find((o) => o.text === '3').is_correct).toBe(false);
+
+    const skipped = questions.find((q) => q._id === q2._id.toString());
+    expect(skipped.correct_option_text).toBe('New Delhi');
+
+    // And the key is denormalised onto the saved answer.
+    expect(res.body.data.answers[0].correct_option_text).toBe('4');
+    expect(res.body.data.answers[0].is_correct).toBe(false);
+  });
+
+  it('never leaks another student’s attempt', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const other = await makeUser();
+    const hack = await twoQuestionHack(admin.user._id);
+
+    const started = await startAttempt(student, hack);
+    await request(app)
+      .post(`/api/v1/attempts/${started.body.data._id}/submit`)
+      .set(auth(student.token));
+
+    const res = await request(app)
+      .get(`/api/v1/attempts/${started.body.data._id}`)
+      .set(auth(other.token));
+
+    expect(res.status).toBe(404);
   });
 });
