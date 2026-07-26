@@ -13,6 +13,8 @@
     "lint:fix": "eslint . --fix",
     "prepare": "husky install",
     "seed:categories": "node seedCategories.js",
+    "backfill:scores": "node scripts/backfill-scores.js",
+    "backfill:scores:apply": "node scripts/backfill-scores.js --apply",
     "test:e2e": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand --detectOpenHandles --forceExit"
   },
   "keywords": [],

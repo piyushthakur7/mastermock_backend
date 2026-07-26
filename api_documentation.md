@@ -1501,88 +1501,21 @@ Base Path: `/api/v1/attempts`
 
 🔒 **Auth Required**
 
-**Description:** Get a specific test attempt by ID. The query is scoped to the logged-in user, so a student can only ever read their own attempt — anyone else's attempt id returns `404`.
+**Description:** Get a specific test attempt by ID. Only the owner of the attempt can read it.
 
 **Success Response (200):** Returns the full test attempt object, plus `test` (the populated hack), `totalAttempted` and `correctAnswers`.
 
-**Answer key — only when `status` is `"COMPLETED"`**
+Once `status` is `COMPLETED`, the response additionally carries the **answer key** so the results screen can show the solution:
 
-Once the attempt is finished, the response also carries the answer key so the results page can highlight the correct option:
+- `questions[]` — every question on the test (including ones the student never answered, which `answers[]` omits), each with:
+  - `options[]` with `is_correct` **not** stripped
+  - `correct_option_id` / `correct_option_text`
+  - `explanation`
+- `answers[]` — each saved answer gains `correct_option_id`, `correct_option_text` and `explanation`
 
-| Field                                | Type   | Description                                                                                     |
-| ------------------------------------ | ------ | ----------------------------------------------------------------------------------------------- |
-| `questions`                          | Array  | **Every** question on the hack, including ones the student skipped. Absent while `IN_PROGRESS`.  |
-| `questions[]._id`                    | String | Question id                                                                                     |
-| `questions[].text`                   | String | Question text                                                                                   |
-| `questions[].marks`                  | Number | Marks for the question                                                                          |
-| `questions[].explanation`            | String | Explanation, or `null`                                                                          |
-| `questions[].options[]`              | Array  | Every option as `{ _id, text, is_correct }` — the key is intact here                             |
-| `questions[].correct_option_id`      | String | Id of the correct option (`null` if the question has none)                                      |
-| `questions[].correct_option_text`    | String | Text of the correct option (`null` if the question has none)                                    |
+While the attempt is `IN_PROGRESS` the `questions` field is absent entirely.
 
-Each entry of `answers[]` is enriched with the same `correct_option_id`, `correct_option_text` and `explanation` for its question.
-
-**Example Response (COMPLETED):**
-```json
-{
-  "statusCode": 200,
-  "data": {
-    "_id": "665a...",
-    "status": "COMPLETED",
-    "score": 0,
-    "totalAttempted": 1,
-    "correctAnswers": 0,
-    "answers": [
-      {
-        "question_id": "665b...",
-        "question_text": "What is 2 + 2?",
-        "selected_option_id": "665c...",
-        "selected_option_text": "3",
-        "is_correct": false,
-        "correct_option_id": "665d...",
-        "correct_option_text": "4",
-        "explanation": "Two plus two is four."
-      }
-    ],
-    "questions": [
-      {
-        "_id": "665b...",
-        "text": "What is 2 + 2?",
-        "marks": 2,
-        "explanation": "Two plus two is four.",
-        "options": [
-          { "_id": "665c...", "text": "3", "is_correct": false },
-          { "_id": "665d...", "text": "4", "is_correct": true }
-        ],
-        "correct_option_id": "665d...",
-        "correct_option_text": "4"
-      },
-      {
-        "_id": "665e...",
-        "text": "What is the capital of France?",
-        "marks": 2,
-        "explanation": "Paris has been the capital since 987.",
-        "options": [
-          { "_id": "665f...", "text": "Lyon", "is_correct": false },
-          { "_id": "6660...", "text": "Paris", "is_correct": true }
-        ],
-        "correct_option_id": "6660...",
-        "correct_option_text": "Paris"
-      }
-    ]
-  },
-  "message": "Attempt fetched",
-  "success": true
-}
-```
-
-> ℹ️ Render the review from `questions[]`, **not** from `answers[]`. `answers[]` only holds questions the student actually touched, so driving the review off it drops every skipped question — the correct answer would then be invisible on exactly the questions the student most needs it for. Match an answer to its question with `answers[].question_id === questions[]._id`; a question with no matching answer was skipped.
-
-> 🚨 **Do not "fix" a missing answer key by removing the strip on `/hacks`.** Every `/hacks` endpoint deliberately drops `questions.options.is_correct` for non-admin callers (`.select('-questions.options.is_correct')` in `hack.controller.js`). `GET /hacks/:id` is what the live exam screen loads — leaving `is_correct` in that response lets a candidate read the whole answer key out of the browser network tab *while taking the test*. This endpoint is the only place the key is released, and only for the owner's own `COMPLETED` attempt. A test asserts the `/hacks` strip stays in place.
-
-**Error Responses:**
-
-- `404` — Attempt not found (including another student's attempt id)
+> ⚠️ The answer key is still stripped from every `/hacks` endpoint for STUDENT users. That strip is what stops a candidate reading the key out of the network tab **during** the exam; this endpoint releases it only once the attempt is finished.
 
 ---
 
