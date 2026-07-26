@@ -237,15 +237,59 @@ export const getAttempt = asyncHandler(async (req, res) => {
     ? obj.answers.filter((a) => a.is_correct).length
     : 0;
 
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { ...obj, test: obj.hack, totalAttempted, correctAnswers },
-        'Attempt fetched',
-      ),
-    );
+  // The answer key is released here, and only here: the attempt is finished
+  // and the query above is scoped to `user: req.user._id`, so a student can
+  // only ever see the key for a test they can no longer be taking. Every
+  // /hacks endpoint still strips `is_correct` — that strip is what stops a
+  // candidate reading the key out of the network tab mid-exam, so it must
+  // not be undone to serve the results page.
+  let questions;
+  if (obj.status === 'COMPLETED') {
+    // `hack` is populated as 'title course', so the questions aren't on it.
+    const hackId = obj.hack?._id || obj.hack;
+    const hackWithKey = hackId
+      ? await Hack.findById(hackId).select('questions')
+      : null;
+
+    if (hackWithKey) {
+      // Every question on the hack, not just the answered ones — `answers`
+      // holds only the questions the student touched, so building the
+      // review off it silently drops every skipped question.
+      questions = hackWithKey.questions.map((q) => {
+        const correct = q.options.find((o) => o.is_correct);
+        return {
+          _id: q._id,
+          text: q.text,
+          marks: q.marks,
+          explanation: q.explanation ?? null,
+          options: q.options.map((o) => ({
+            _id: o._id,
+            text: o.text,
+            is_correct: o.is_correct,
+          })),
+          correct_option_id: correct ? correct._id : null,
+          correct_option_text: correct ? correct.text : null,
+        };
+      });
+
+      const byId = new Map(questions.map((q) => [q._id.toString(), q]));
+      obj.answers = (obj.answers || []).map((a) => {
+        const q = byId.get(a.question_id?.toString());
+        return {
+          ...a,
+          correct_option_id: q ? q.correct_option_id : null,
+          correct_option_text: q ? q.correct_option_text : null,
+          explanation: q ? q.explanation : null,
+        };
+      });
+    }
+  }
+
+  const body = { ...obj, test: obj.hack, totalAttempted, correctAnswers };
+  // Absent entirely while the test is still in progress.
+  if (questions) body.questions = questions;
+
+  return res.status(200).json(new ApiResponse(200, body, 'Attempt fetched'));
 });
 
 // @desc    Evaluate test results
