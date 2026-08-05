@@ -177,6 +177,7 @@ describe('participation counts (admin only)', () => {
     expect(listed.unique_students).toBe(2);
     expect(listed.total_attempts).toBe(3);
     expect(listed.completed_attempts).toBe(3);
+    expect(listed.students_appeared).toBe(2);
 
     // Same numbers when opening the single test.
     const one = await request(app)
@@ -185,6 +186,7 @@ describe('participation counts (admin only)', () => {
 
     expect(one.body.data.unique_students).toBe(2);
     expect(one.body.data.total_attempts).toBe(3);
+    expect(one.body.data.students_appeared).toBe(2);
   });
 
   it('reports zero for a test nobody has taken', async () => {
@@ -199,19 +201,63 @@ describe('participation counts (admin only)', () => {
     expect(res.body.data.total_attempts).toBe(0);
   });
 
-  it('never exposes the counts to a student', async () => {
+  it('shows students the participation count but not the admin internals', async () => {
     const admin = await makeAdmin();
     const student = await makeUser();
+    const other = await makeUser();
     const hack = await makeHack(admin.user._id);
     await startAndSubmit(student, hack);
+    await startAndSubmit(other, hack);
 
     const list = await request(app)
       .get('/api/v1/hacks')
       .set(auth(student.token));
     const listed = list.body.data.find((h) => h._id === hack._id.toString());
 
+    // Public: the "N students have given this mock" line on the card.
+    expect(listed.students_appeared).toBe(2);
+
+    // Operational detail stays admin-only.
     expect(listed.unique_students).toBeUndefined();
     expect(listed.total_attempts).toBeUndefined();
+    expect(listed.completed_attempts).toBeUndefined();
+  });
+
+  it('counts only students who finished — an abandoned attempt does not count', async () => {
+    const admin = await makeAdmin();
+    const finisher = await makeUser();
+    const quitter = await makeUser();
+    const hack = await makeHack(admin.user._id);
+
+    await startAndSubmit(finisher, hack);
+    // Starts but never submits: still IN_PROGRESS.
+    await request(app)
+      .post('/api/v1/attempts/start')
+      .set(auth(quitter.token))
+      .send({ hack_id: hack._id.toString() });
+
+    const res = await request(app)
+      .get(`/api/v1/hacks/${hack._id}`)
+      .set(auth(finisher.token));
+
+    expect(res.body.data.students_appeared).toBe(1);
+    expect(res.body.data.unique_students).toBeUndefined();
+  });
+
+  it('does not double-count a student who retakes a free mock', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await makeHack(admin.user._id);
+
+    await startAndSubmit(student, hack);
+    await startAndSubmit(student, hack);
+    await startAndSubmit(student, hack);
+
+    const res = await request(app)
+      .get(`/api/v1/hacks/${hack._id}`)
+      .set(auth(student.token));
+
+    expect(res.body.data.students_appeared).toBe(1);
   });
 });
 

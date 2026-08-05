@@ -199,15 +199,20 @@ export const getHacks = asyncHandler(async (req, res) => {
 
   const hacks = await query;
 
-  // Participation counts, for admins only. One grouped aggregate over the
-  // whole page of tests rather than a countDocuments per test, so the admin
-  // list stays a single round trip no matter how many tests there are.
+  // Participation counts. One grouped aggregate over the whole page of tests
+  // rather than a countDocuments per test, so the list stays a single round
+  // trip no matter how many tests there are.
   //
-  // `unique_students` is the number the admin actually wants when they ask
-  // "how many students gave this mock" — attempts alone double-counts anyone
-  // who took a free test more than once.
+  // `students_appeared` is public — it's the social-proof line on the mock
+  // card ("142 students have given this mock"). It counts distinct students
+  // with a COMPLETED attempt: someone who opened a test and walked away has
+  // not "given" it, and a free test can be retaken, so raw attempts would
+  // both overstate the number and double-count the same person.
+  //
+  // The rest stay admin-only — attempt/completion internals are operational
+  // detail, not something to publish to students.
   const statsByHack = new Map();
-  if (isAdmin && hacks.length) {
+  if (hacks.length) {
     const rows = await mongoose.model('TestAttempt').aggregate([
       { $match: { hack: { $in: hacks.map((h) => h._id) } } },
       {
@@ -218,11 +223,17 @@ export const getHacks = asyncHandler(async (req, res) => {
             $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
           },
           students: { $addToSet: '$user' },
+          completed_students: {
+            $addToSet: {
+              $cond: [{ $eq: ['$status', 'COMPLETED'] }, '$user', '$$REMOVE'],
+            },
+          },
         },
       },
     ]);
     rows.forEach((r) => {
       statsByHack.set(r._id.toString(), {
+        students_appeared: r.completed_students.length,
         total_attempts: r.total_attempts,
         completed_attempts: r.completed_attempts,
         unique_students: r.students.length,
@@ -230,20 +241,26 @@ export const getHacks = asyncHandler(async (req, res) => {
     });
   }
 
+  const emptyStats = {
+    students_appeared: 0,
+    total_attempts: 0,
+    completed_attempts: 0,
+    unique_students: 0,
+  };
+
   // Attach schedule_status + server_time so clients don't depend on the
   // student's device clock to decide upcoming/live/ended.
-  const payload = hacks.map((h) => ({
-    ...h.toObject(),
-    schedule_status: getScheduleStatus(h, now),
-    server_time: now.toISOString(),
-    ...(isAdmin
-      ? statsByHack.get(h._id.toString()) || {
-          total_attempts: 0,
-          completed_attempts: 0,
-          unique_students: 0,
-        }
-      : {}),
-  }));
+  const payload = hacks.map((h) => {
+    const stats = statsByHack.get(h._id.toString()) || emptyStats;
+    const { students_appeared, ...adminOnly } = stats;
+    return {
+      ...h.toObject(),
+      schedule_status: getScheduleStatus(h, now),
+      server_time: now.toISOString(),
+      students_appeared,
+      ...(isAdmin ? adminOnly : {}),
+    };
+  });
 
   return res
     .status(200)
@@ -262,40 +279,42 @@ export const getHackById = asyncHandler(async (req, res) => {
 
   if (!hack) throw new ApiError(404, 'Hack not found');
 
-  // Same participation numbers as the admin list, so opening a single test
-  // answers "how many students have given this mock" without leaving the page.
-  if (req.user?.role === 'ADMIN') {
-    const [row] = await mongoose.model('TestAttempt').aggregate([
-      { $match: { hack: hack._id } },
-      {
-        $group: {
-          _id: null,
-          total_attempts: { $sum: 1 },
-          completed_attempts: {
-            $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+  // Same participation numbers as the list. students_appeared is public (the
+  // "N students have given this mock" line); the rest are admin-only. See the
+  // note in getHacks for why "appeared" means distinct COMPLETED attempts.
+  const [row] = await mongoose.model('TestAttempt').aggregate([
+    { $match: { hack: hack._id } },
+    {
+      $group: {
+        _id: null,
+        total_attempts: { $sum: 1 },
+        completed_attempts: {
+          $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+        },
+        students: { $addToSet: '$user' },
+        completed_students: {
+          $addToSet: {
+            $cond: [{ $eq: ['$status', 'COMPLETED'] }, '$user', '$$REMOVE'],
           },
-          students: { $addToSet: '$user' },
         },
       },
-    ]);
+    },
+  ]);
 
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          ...hack.toObject(),
-          total_attempts: row?.total_attempts || 0,
-          completed_attempts: row?.completed_attempts || 0,
-          unique_students: row?.students.length || 0,
-        },
-        'Hack fetched successfully',
-      ),
-    );
+  const payload = {
+    ...hack.toObject(),
+    students_appeared: row?.completed_students.length || 0,
+  };
+
+  if (req.user?.role === 'ADMIN') {
+    payload.total_attempts = row?.total_attempts || 0;
+    payload.completed_attempts = row?.completed_attempts || 0;
+    payload.unique_students = row?.students.length || 0;
   }
 
   return res
     .status(200)
-    .json(new ApiResponse(200, hack, 'Hack fetched successfully'));
+    .json(new ApiResponse(200, payload, 'Hack fetched successfully'));
 });
 
 // --- STUDENT: PURCHASED TESTS ---
