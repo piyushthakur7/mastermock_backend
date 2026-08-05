@@ -10,7 +10,16 @@ export const registerSchema = z.object({
       /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d@$!%*#?&]{8,}$/,
       'Password must contain at least one letter and one number',
     ),
-  phone_number: z.string().optional(),
+  // Required: every student must give a mobile number when they sign up.
+  // Accepts the forms people actually type — "+91 98765 43210",
+  // "098765-43210" — and normalises to the bare 10 digits that get stored, so
+  // the unique index can't be defeated by formatting alone.
+  phone_number: z
+    .string({ required_error: 'Mobile number is required' })
+    .transform((v) => v.replace(/\D/g, '').replace(/^(?:91|0)(?=\d{10}$)/, ''))
+    .refine((v) => /^[6-9]\d{9}$/.test(v), {
+      message: 'Enter a valid 10-digit Indian mobile number',
+    }),
 });
 
 export const loginSchema = z.object({

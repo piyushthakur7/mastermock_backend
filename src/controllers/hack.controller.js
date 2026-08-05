@@ -199,12 +199,50 @@ export const getHacks = asyncHandler(async (req, res) => {
 
   const hacks = await query;
 
+  // Participation counts, for admins only. One grouped aggregate over the
+  // whole page of tests rather than a countDocuments per test, so the admin
+  // list stays a single round trip no matter how many tests there are.
+  //
+  // `unique_students` is the number the admin actually wants when they ask
+  // "how many students gave this mock" — attempts alone double-counts anyone
+  // who took a free test more than once.
+  const statsByHack = new Map();
+  if (isAdmin && hacks.length) {
+    const rows = await mongoose.model('TestAttempt').aggregate([
+      { $match: { hack: { $in: hacks.map((h) => h._id) } } },
+      {
+        $group: {
+          _id: '$hack',
+          total_attempts: { $sum: 1 },
+          completed_attempts: {
+            $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+          },
+          students: { $addToSet: '$user' },
+        },
+      },
+    ]);
+    rows.forEach((r) => {
+      statsByHack.set(r._id.toString(), {
+        total_attempts: r.total_attempts,
+        completed_attempts: r.completed_attempts,
+        unique_students: r.students.length,
+      });
+    });
+  }
+
   // Attach schedule_status + server_time so clients don't depend on the
   // student's device clock to decide upcoming/live/ended.
   const payload = hacks.map((h) => ({
     ...h.toObject(),
     schedule_status: getScheduleStatus(h, now),
     server_time: now.toISOString(),
+    ...(isAdmin
+      ? statsByHack.get(h._id.toString()) || {
+          total_attempts: 0,
+          completed_attempts: 0,
+          unique_students: 0,
+        }
+      : {}),
   }));
 
   return res
@@ -223,6 +261,37 @@ export const getHackById = asyncHandler(async (req, res) => {
   ); // Hide answers (and the author's user id) unless admin
 
   if (!hack) throw new ApiError(404, 'Hack not found');
+
+  // Same participation numbers as the admin list, so opening a single test
+  // answers "how many students have given this mock" without leaving the page.
+  if (req.user?.role === 'ADMIN') {
+    const [row] = await mongoose.model('TestAttempt').aggregate([
+      { $match: { hack: hack._id } },
+      {
+        $group: {
+          _id: null,
+          total_attempts: { $sum: 1 },
+          completed_attempts: {
+            $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+          },
+          students: { $addToSet: '$user' },
+        },
+      },
+    ]);
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          ...hack.toObject(),
+          total_attempts: row?.total_attempts || 0,
+          completed_attempts: row?.completed_attempts || 0,
+          unique_students: row?.students.length || 0,
+        },
+        'Hack fetched successfully',
+      ),
+    );
+  }
 
   return res
     .status(200)

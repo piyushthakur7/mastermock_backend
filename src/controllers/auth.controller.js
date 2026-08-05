@@ -34,6 +34,14 @@ export const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(409, 'User with this email already exists');
   }
 
+  // phone_number carries a unique index. Without this check a repeat number
+  // surfaces as a raw E11000 duplicate-key error — a 500 with a Mongo stack
+  // trace, where the user should simply be told the number is already in use.
+  const existedPhone = await User.findOne({ phone_number });
+  if (existedPhone) {
+    throw new ApiError(409, 'User with this mobile number already exists');
+  }
+
   const user = await User.create({
     full_name,
     email,

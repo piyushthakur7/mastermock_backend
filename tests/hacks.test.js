@@ -1,6 +1,12 @@
 import request from 'supertest';
 import app from '../src/app.js';
-import { makeAdmin, makeHack, auth, hoursFromNow } from './helpers.js';
+import {
+  makeAdmin,
+  makeUser,
+  makeHack,
+  auth,
+  hoursFromNow,
+} from './helpers.js';
 
 describe('GET /api/v1/hacks — schedule window filtering', () => {
   it('lists a test with no schedule', async () => {
@@ -140,5 +146,114 @@ describe('GET /api/v1/hacks?status= (admin)', () => {
 
     expect(published.body.data.map((h) => h.title)).toEqual(['Published']);
     expect(draft.body.data.map((h) => h.title)).toEqual(['Draft']);
+  });
+});
+
+describe('participation counts (admin only)', () => {
+  const startAndSubmit = async (student, hack) => {
+    const started = await request(app)
+      .post('/api/v1/attempts/start')
+      .set(auth(student.token))
+      .send({ hack_id: hack._id.toString() });
+    await request(app)
+      .post(`/api/v1/attempts/${started.body.data._id}/submit`)
+      .set(auth(student.token));
+  };
+
+  it('counts distinct students, not just attempts', async () => {
+    const admin = await makeAdmin();
+    const alice = await makeUser();
+    const bob = await makeUser();
+    const hack = await makeHack(admin.user._id);
+
+    // Alice takes it twice (free tests can be retaken), Bob once.
+    await startAndSubmit(alice, hack);
+    await startAndSubmit(alice, hack);
+    await startAndSubmit(bob, hack);
+
+    const list = await request(app).get('/api/v1/hacks').set(auth(admin.token));
+    const listed = list.body.data.find((h) => h._id === hack._id.toString());
+
+    expect(listed.unique_students).toBe(2);
+    expect(listed.total_attempts).toBe(3);
+    expect(listed.completed_attempts).toBe(3);
+
+    // Same numbers when opening the single test.
+    const one = await request(app)
+      .get(`/api/v1/hacks/${hack._id}`)
+      .set(auth(admin.token));
+
+    expect(one.body.data.unique_students).toBe(2);
+    expect(one.body.data.total_attempts).toBe(3);
+  });
+
+  it('reports zero for a test nobody has taken', async () => {
+    const admin = await makeAdmin();
+    const hack = await makeHack(admin.user._id);
+
+    const res = await request(app)
+      .get(`/api/v1/hacks/${hack._id}`)
+      .set(auth(admin.token));
+
+    expect(res.body.data.unique_students).toBe(0);
+    expect(res.body.data.total_attempts).toBe(0);
+  });
+
+  it('never exposes the counts to a student', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await makeHack(admin.user._id);
+    await startAndSubmit(student, hack);
+
+    const list = await request(app)
+      .get('/api/v1/hacks')
+      .set(auth(student.token));
+    const listed = list.body.data.find((h) => h._id === hack._id.toString());
+
+    expect(listed.unique_students).toBeUndefined();
+    expect(listed.total_attempts).toBeUndefined();
+  });
+});
+
+describe('PUT /api/v1/hacks/:id — converting a paid test to free', () => {
+  it('clears the schedule window so the test becomes startable again', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    // A paid test whose scheduled window has already closed.
+    const hack = await makeHack(admin.user._id, {
+      access_type: 'paid',
+      price: 199,
+      start_time: hoursFromNow(-5),
+      end_time: hoursFromNow(-2),
+    });
+
+    // Convert to free AND clear the window, exactly as the admin UI now does.
+    const updated = await request(app)
+      .put(`/api/v1/hacks/${hack._id}`)
+      .set(auth(admin.token))
+      .send({
+        access_type: 'free',
+        price: 0,
+        start_time: null,
+        end_time: null,
+      });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.data.access_type).toBe('free');
+    expect(updated.body.data.price).toBe(0);
+    expect(updated.body.data.start_time).toBeNull();
+    expect(updated.body.data.end_time).toBeNull();
+
+    // It is now visible to students and can actually be started — before the
+    // fix the stale expired window kept 403-ing "the window has ended".
+    const listed = (await request(app).get('/api/v1/hacks')).body.data;
+    expect(listed.map((h) => h._id)).toContain(hack._id.toString());
+
+    const started = await request(app)
+      .post('/api/v1/attempts/start')
+      .set(auth(student.token))
+      .send({ hack_id: hack._id.toString() });
+
+    expect(started.status).toBe(201);
   });
 });
