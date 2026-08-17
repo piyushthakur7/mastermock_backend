@@ -36,6 +36,75 @@ describe('leaderboard privacy', () => {
     expect(JSON.stringify(res.body)).not.toContain('alice-private@example.com');
   });
 
+  // The answer key is released on a COMPLETED attempt, and free tests allow
+  // unlimited retakes. Ranking on best-of-N turned that into a free win:
+  // submit blank, read the key off the results page, retake, top the board.
+  it('ranks a retake on the first attempt, so throwing one away gains nothing', async () => {
+    const admin = await makeAdmin();
+    const cheater = await makeUser({ full_name: 'Blank First' });
+    const honest = await makeUser({ full_name: 'Honest Taker' });
+    const viewer = await makeUser();
+    const hack = await makeHack(admin.user._id);
+
+    // Cheater: blank attempt, then a perfect retake after reading the key.
+    await TestAttempt.create({
+      user: cheater.user._id,
+      hack: hack._id,
+      status: 'COMPLETED',
+      score: 0,
+      percentage: 0,
+      completed_at: new Date(Date.now() - 60 * 60 * 1000),
+      answers: [],
+    });
+    await TestAttempt.create({
+      user: cheater.user._id,
+      hack: hack._id,
+      status: 'COMPLETED',
+      score: 2,
+      percentage: 100,
+      completed_at: new Date(),
+      answers: [],
+    });
+
+    // Honest student: one attempt, partial credit.
+    await TestAttempt.create({
+      user: honest.user._id,
+      hack: hack._id,
+      status: 'COMPLETED',
+      score: 1,
+      percentage: 50,
+      completed_at: new Date(Date.now() - 30 * 60 * 1000),
+      answers: [],
+    });
+
+    const res = await request(app)
+      .get(`/api/v1/leaderboard/${hack._id}`)
+      .set(auth(viewer.token));
+
+    expect(res.status).toBe(200);
+
+    const [first, second] = res.body.data.entries;
+    expect(first.user.full_name).toBe('Honest Taker');
+    expect(first.best_score).toBe(1);
+    expect(first.rank).toBe(1);
+
+    // The perfect retake does not count; the blank first attempt does.
+    expect(second.user.full_name).toBe('Blank First');
+    expect(second.best_score).toBe(0);
+    expect(second.rank).toBe(2);
+    // The retake is still recorded, just not ranked.
+    expect(second.total_attempts).toBe(2);
+
+    // my-rank must agree with the board, or the student sees two answers.
+    const mine = await request(app)
+      .get(`/api/v1/leaderboard/${hack._id}/my-rank`)
+      .set(auth(cheater.token));
+
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.rank).toBe(2);
+    expect(mine.body.data.best_score).toBe(0);
+  });
+
   it('rejects a malformed test id with 400 rather than crashing', async () => {
     const viewer = await makeUser();
 

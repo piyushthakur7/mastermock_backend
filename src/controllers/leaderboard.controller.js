@@ -16,7 +16,17 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
     return res.status(400).json(new ApiResponse(400, null, 'Invalid test ID'));
   }
 
-  // Aggregate: group by user, take best score per user
+  // Rank on each user's FIRST completed attempt, not their best.
+  //
+  // Free tests allow unlimited attempts, and GET /attempts/:id hands back the
+  // full answer key once an attempt is COMPLETED. Ranking on $max score made
+  // those three facts combine into a free win: submit a blank attempt, read
+  // every correct answer off the results page, retake, and top a board that
+  // pays out real rewards. A blank first attempt now IS the ranked score, so
+  // there is nothing to gain by throwing one away.
+  //
+  // Retakes still run, still score, and still show up in the student's own
+  // history and in total_attempts — they just don't move the board.
   const leaderboard = await TestAttempt.aggregate([
     {
       $match: {
@@ -24,16 +34,24 @@ export const getHackLeaderboard = asyncHandler(async (req, res) => {
         status: 'COMPLETED',
       },
     },
+    // $first below reads whatever this sort put at the head of each group.
+    { $sort: { completed_at: 1, _id: 1 } },
     {
       $group: {
         _id: '$user',
-        best_score: { $max: '$score' },
-        best_percentage: { $max: '$percentage' },
+        // Field names are unchanged so the frontend contract holds; what
+        // changed is which attempt they come from.
+        best_score: { $first: '$score' },
+        best_percentage: { $first: '$percentage' },
         total_attempts: { $sum: 1 },
+        first_attempt_at: { $first: '$completed_at' },
         last_attempt_at: { $max: '$completed_at' },
       },
     },
-    { $sort: { best_score: -1, last_attempt_at: 1 } },
+    // Tie-break on the ranked attempt itself: whoever set the score first
+    // wins. Using last_attempt_at here would let a later retake change a
+    // student's rank without changing their score.
+    { $sort: { best_score: -1, first_attempt_at: 1 } },
     {
       $lookup: {
         from: 'users',
@@ -98,7 +116,8 @@ export const getMyRank = asyncHandler(async (req, res) => {
     return res.status(400).json(new ApiResponse(400, null, 'Invalid test ID'));
   }
 
-  // Get the user's best score
+  // The user's ranked attempt — their first completed one. See the comment in
+  // getHackLeaderboard for why ranking is not on best score.
   const userBest = await TestAttempt.aggregate([
     {
       $match: {
@@ -107,12 +126,14 @@ export const getMyRank = asyncHandler(async (req, res) => {
         status: 'COMPLETED',
       },
     },
+    { $sort: { completed_at: 1, _id: 1 } },
     {
       $group: {
         _id: '$user',
-        best_score: { $max: '$score' },
-        best_percentage: { $max: '$percentage' },
+        best_score: { $first: '$score' },
+        best_percentage: { $first: '$percentage' },
         total_attempts: { $sum: 1 },
+        first_attempt_at: { $first: '$completed_at' },
         last_attempt_at: { $max: '$completed_at' },
       },
     },
@@ -131,11 +152,12 @@ export const getMyRank = asyncHandler(async (req, res) => {
   }
 
   const myBestScore = userBest[0].best_score;
-  const myLastAttemptAt = userBest[0].last_attempt_at;
+  const myFirstAttemptAt = userBest[0].first_attempt_at;
 
   // Count users ranked ahead of me, using the same ordering as the
-  // leaderboard endpoint (best_score desc, then earlier last attempt wins) —
-  // otherwise a tied user sees a different rank here than on the board.
+  // leaderboard endpoint (ranked score desc, then earlier first attempt
+  // wins) — otherwise a tied user sees a different rank here than on the
+  // board.
   const higherScoreUsers = await TestAttempt.aggregate([
     {
       $match: {
@@ -143,11 +165,12 @@ export const getMyRank = asyncHandler(async (req, res) => {
         status: 'COMPLETED',
       },
     },
+    { $sort: { completed_at: 1, _id: 1 } },
     {
       $group: {
         _id: '$user',
-        best_score: { $max: '$score' },
-        last_attempt_at: { $max: '$completed_at' },
+        best_score: { $first: '$score' },
+        first_attempt_at: { $first: '$completed_at' },
       },
     },
     {
@@ -156,7 +179,7 @@ export const getMyRank = asyncHandler(async (req, res) => {
           { best_score: { $gt: myBestScore } },
           {
             best_score: myBestScore,
-            last_attempt_at: { $lt: myLastAttemptAt },
+            first_attempt_at: { $lt: myFirstAttemptAt },
           },
         ],
       },
