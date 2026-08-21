@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
+import { BODY_LIMIT } from '../constants.js';
 
 // Error logs capture the request body, which on the auth routes means
 // plaintext passwords and reset tokens land in logs/. Mask them.
@@ -33,6 +34,15 @@ export const errorHandler = (err, req, res, next) => {
   if (err.name === 'CastError') {
     message = `Resource not found. Invalid: ${err.path}`;
     statusCode = 400;
+  }
+
+  // body-parser's own message is "request entity too large", which tells an
+  // admin staring at a half-saved test nothing about what to do next. Hitting
+  // this now means a genuinely huge paper (hundreds of bilingual questions),
+  // not the everyday 10-question save that the old 16kb ceiling rejected.
+  if (err.type === 'entity.too.large' || statusCode === 413) {
+    statusCode = 413;
+    message = `This test is larger than the ${BODY_LIMIT} the server accepts in one request. Save it as two shorter tests, or add the remaining questions from the test's Edit page one at a time.`;
   }
 
   const duration = req.startTime

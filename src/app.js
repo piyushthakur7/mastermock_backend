@@ -8,6 +8,7 @@ import { env } from './config/env.js';
 import { errorHandler } from './middlewares/error.middleware.js';
 import { ApiError } from './utils/ApiError.js';
 import { correlationIdMiddleware } from './middlewares/correlation.middleware.js';
+import { BODY_LIMIT } from './constants.js';
 
 const app = express();
 
@@ -49,13 +50,13 @@ app.use(morgan('dev'));
 // --- MIDDLEWARES ---
 app.use(
   express.json({
-    limit: '16kb',
+    limit: BODY_LIMIT,
     verify: (req, res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
-app.use(express.urlencoded({ extended: true, limit: '16kb' }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 app.use(express.static('public'));
 app.use(cookieParser());
 app.use(auditLogger);
