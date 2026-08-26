@@ -1,7 +1,19 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import path from 'path';
+import os from 'os';
 
 dotenv.config({ path: './.env' });
+
+// Defaults to a sibling of the app directory rather than a folder inside it, so
+// a deploy that overwrites or cleans the app tree cannot take the PDF store with
+// it. Override with an absolute path (e.g. /var/lib/mastermocks/pdf-store.db).
+// Under test the store is disposable, so it goes to the OS temp dir instead of
+// leaving a stray data folder next to the repo.
+const DEFAULT_PDF_DB_PATH =
+  process.env.NODE_ENV === 'test'
+    ? path.join(os.tmpdir(), 'mastermocks-test-pdf-store.db')
+    : path.join(process.cwd(), '..', 'mastermocks-data', 'pdf-store.db');
 
 const envSchema = z.object({
   PORT: z.string().default('3000'),
@@ -21,6 +33,7 @@ const envSchema = z.object({
     .enum(['development', 'production', 'test'])
     .default('development'),
   FRONTEND_URL: z.string().default('http://localhost:3000'),
+  PDF_DB_PATH: z.string().default(DEFAULT_PDF_DB_PATH),
   CLOUDINARY_CLOUD_NAME: z.string().optional().default(''),
   CLOUDINARY_API_KEY: z.string().optional().default(''),
   CLOUDINARY_API_SECRET: z.string().optional().default(''),

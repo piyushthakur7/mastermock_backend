@@ -3,12 +3,8 @@ import { Course } from '../models/course.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { uploadFileLocally, deleteFileLocally } from '../utils/fileStorage.js';
+import { saveFile, getFile, deleteFile } from '../utils/fileStorage.js';
 import { logger } from '../utils/logger.js';
-import path from 'path';
-import jwt from 'jsonwebtoken';
-import { env } from '../config/env.js';
-import fs from 'fs';
 import crypto from 'crypto';
 
 // @desc    Upload a new resource
@@ -38,13 +34,16 @@ export const uploadResource = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'File is required');
   }
 
-  // Generate unique filename
+  // Generate unique storage key
   const uniqueSuffix = crypto.randomBytes(8).toString('hex');
   const folder = course || 'standalone';
-  const fileName = `resources/${folder}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
+  const storageKey = `resources/${folder}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
 
-  // Upload locally
-  const publicId = await uploadFileLocally(req.file.buffer, fileName);
+  // Persist the bytes in the SQLite blob store
+  saveFile(req.file.buffer, storageKey, {
+    originalName: req.file.originalname,
+    mimeType: req.file.mimetype || 'application/pdf',
+  });
 
   const resource = await Resource.create({
     title,
@@ -55,7 +54,7 @@ export const uploadResource = asyncHandler(async (req, res) => {
     access_type: access_type || 'free',
     price: price || 0,
     discount_price,
-    file_url: publicId, // Storing the Cloudinary publicId here for signed URLs later
+    file_url: storageKey, // Key into the SQLite blob store, not a URL
     created_by: req.user._id,
   });
 
@@ -74,8 +73,8 @@ export const deleteResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  // Delete from local storage
-  await deleteFileLocally(resource.file_url);
+  // Delete from the blob store
+  deleteFile(resource.file_url);
 
   // Hard delete from DB as it's just a file reference
   await resource.deleteOne();
@@ -189,9 +188,9 @@ export const downloadResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Storage path missing');
   }
 
-  const fullPath = path.join(process.cwd(), 'uploads', resource.file_url);
+  const file = getFile(resource.file_url);
 
-  if (!fs.existsSync(fullPath)) {
+  if (!file) {
     logger.error(
       JSON.stringify({
         event: 'DOWNLOAD_FAILED',
@@ -206,12 +205,17 @@ export const downloadResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'File not found');
   }
 
+  // A title containing a quote, newline or non-ASCII byte would otherwise break
+  // out of the quoted filename and corrupt the response headers.
+  const safeFilename = resource.title.replace(/[^\w\-. ]/g, '_');
+
   // Set headers for download
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${resource.title}.pdf"`,
+    `attachment; filename="${safeFilename}.pdf"`,
   );
-  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Type', file.mime_type || 'application/pdf');
+  res.setHeader('Content-Length', file.size);
 
   // Track download duration
   const startTime = process.hrtime();
@@ -241,7 +245,7 @@ export const downloadResource = asyncHandler(async (req, res) => {
     logger.error(
       JSON.stringify({
         event: 'DOWNLOAD_FAILED',
-        reason: 'Stream error',
+        reason: 'Write error',
         userId: req.user?._id,
         fileId: resource._id,
         storagePath: resource.file_url,
@@ -252,7 +256,5 @@ export const downloadResource = asyncHandler(async (req, res) => {
     );
   });
 
-  // Stream directly to response
-  const fileStream = fs.createReadStream(fullPath);
-  fileStream.pipe(res);
+  res.end(file.data);
 });

@@ -1,47 +1,80 @@
-import fs from 'fs';
-import path from 'path';
-import jwt from 'jsonwebtoken';
-import { env } from '../config/env.js';
+import { db } from '../db/sqliteStore.js';
 import { ApiError } from './ApiError.js';
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+// better-sqlite3 is synchronous by design; these statements are prepared once
+// and reused for every call.
+const insertFile = db.prepare(
+  `INSERT INTO resource_files (storage_key, original_name, mime_type, size, data)
+   VALUES (@storage_key, @original_name, @mime_type, @size, @data)`,
+);
+
+const selectFile = db.prepare(
+  `SELECT storage_key, original_name, mime_type, size, data
+   FROM resource_files WHERE storage_key = ?`,
+);
+
+const selectFileMeta = db.prepare(
+  `SELECT storage_key, original_name, mime_type, size
+   FROM resource_files WHERE storage_key = ?`,
+);
+
+const deleteFileRow = db.prepare(
+  `DELETE FROM resource_files WHERE storage_key = ?`,
+);
 
 /**
- * Uploads a file buffer to local storage
- * @param {Buffer} fileBuffer - The file buffer
- * @param {string} fileName - The filename (can include path)
- * @returns {Promise<string>} - Returns the relative file path
+ * Stores a file's bytes in the SQLite blob store.
+ * @param {Buffer} fileBuffer - The file contents
+ * @param {string} storageKey - Unique key used to retrieve the file later
+ * @param {object} meta
+ * @param {string} meta.originalName - Original client filename
+ * @param {string} meta.mimeType - Content type to serve the file back with
+ * @returns {string} The storage key
  */
-export const uploadFileLocally = async (fileBuffer, fileName) => {
+export const saveFile = (
+  fileBuffer,
+  storageKey,
+  { originalName, mimeType },
+) => {
   try {
-    const fullPath = path.join(UPLOAD_DIR, fileName);
-    const dir = path.dirname(fullPath);
-
-    // Ensure directory exists
-    await fs.promises.mkdir(dir, { recursive: true });
-
-    // Write file
-    await fs.promises.writeFile(fullPath, fileBuffer);
-
-    return fileName;
+    insertFile.run({
+      storage_key: storageKey,
+      original_name: originalName,
+      mime_type: mimeType,
+      size: fileBuffer.length,
+      data: fileBuffer,
+    });
+    return storageKey;
   } catch (error) {
-    console.error('Local File Upload Error:', error);
-    throw new ApiError(500, 'Failed to save file locally');
+    console.error('SQLite File Save Error:', error);
+    throw new ApiError(500, 'Failed to save file');
   }
 };
 
 /**
- * Deletes a file from local storage
- * @param {string} fileName - The relative file path
+ * Reads a file back out of the store.
+ * @param {string} storageKey
+ * @returns {{storage_key: string, original_name: string, mime_type: string, size: number, data: Buffer}|undefined}
  */
-export const deleteFileLocally = async (fileName) => {
+export const getFile = (storageKey) => selectFile.get(storageKey);
+
+/**
+ * Checks a file exists without pulling its bytes into memory.
+ * @param {string} storageKey
+ * @returns {boolean}
+ */
+export const fileExists = (storageKey) =>
+  Boolean(selectFileMeta.get(storageKey));
+
+/**
+ * Removes a file from the store.
+ * @param {string} storageKey
+ */
+export const deleteFile = (storageKey) => {
   try {
-    const fullPath = path.join(UPLOAD_DIR, fileName);
-    if (fs.existsSync(fullPath)) {
-      await fs.promises.unlink(fullPath);
-    }
+    deleteFileRow.run(storageKey);
   } catch (error) {
-    console.error('Local File Delete Error:', error);
-    throw new ApiError(500, 'Failed to delete file locally');
+    console.error('SQLite File Delete Error:', error);
+    throw new ApiError(500, 'Failed to delete file');
   }
 };
