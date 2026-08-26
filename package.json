@@ -15,6 +15,10 @@
     "seed:categories": "node seedCategories.js",
     "backfill:scores": "node scripts/backfill-scores.js",
     "backfill:scores:apply": "node scripts/backfill-scores.js --apply",
+    "migrate:pdfs": "node scripts/migrate-pdfs-to-sqlite.js",
+    "migrate:pdfs:apply": "node scripts/migrate-pdfs-to-sqlite.js --apply",
+    "check:pdfs": "node scripts/check-pdf-integrity.js",
+    "backup:pdfs": "node scripts/backup-pdf-store.js",
     "test:e2e": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand --detectOpenHandles --forceExit"
   },
   "keywords": [],
