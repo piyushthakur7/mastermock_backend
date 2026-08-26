@@ -11,9 +11,24 @@ import { logger } from '../utils/logger.js';
 // it comes back the moment the file is parked inside the app tree.
 const DB_PATH = path.resolve(env.PDF_DB_PATH);
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+let db;
 
-const db = new Database(DB_PATH);
+try {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  db = new Database(DB_PATH);
+} catch (error) {
+  // Thrown at import time, so the process dies before serving traffic. Say why
+  // in terms that point at the fix — an unwritable directory (a root-owned
+  // /var/lib path, a read-only mount) is the usual cause and the raw EACCES
+  // gives no hint that PDF_DB_PATH is the knob to turn.
+  console.error(
+    `❌ Cannot open the PDF store at ${DB_PATH}\n` +
+      `   ${error.message}\n` +
+      `   Check PDF_DB_PATH points somewhere the app user can write, e.g.\n` +
+      `     sudo mkdir -p ${path.dirname(DB_PATH)} && sudo chown $USER ${path.dirname(DB_PATH)}`,
+  );
+  throw error;
+}
 
 // WAL lets reads (downloads) run concurrently with writes (uploads) instead of
 // serialising behind a single global lock.
