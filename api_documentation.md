@@ -345,7 +345,7 @@ The API has no rate limiting. All endpoints accept unlimited requests.
   "title": "String (required, min 3 chars)",
   "description": "String (optional)",
   "course": "ObjectId (ref: Course)",
-  "file_url": "String (S3 key)",
+  "file_url": "String — key into the SQLite blob store, NOT a URL. Never link to it directly; download via GET /resources/:id/download",
   "resource_type": "String — 'pdf' | 'video' | 'notes' | 'assignment' | 'solution'",
   "created_by": "ObjectId (ref: User)",
   "is_active": "Boolean (default: true)",
@@ -1064,9 +1064,28 @@ Base Path: `/api/v1/resources`
 
 ---
 
+#### `GET /api/v1/resources`
+
+🔒 **Auth Required** (any logged-in user)
+
+**Description:** List all active standalone resources. Every PDF is free to any
+logged-in user — there is no enrollment or purchase check on resources.
+
+**Query Params (all optional):**
+
+| Param           | Type   | Description                          |
+| --------------- | ------ | ------------------------------------ |
+| `category`      | String | Filter by category ObjectId          |
+| `resource_type` | String | `pdf` / `video` / `notes` / ...      |
+| `access_type`   | String | `free` / `paid`                      |
+
+**Response (200):** Returns array of resource objects, newest first.
+
+---
+
 #### `GET /api/v1/resources/course/:courseId`
 
-🔒 **Auth Required** (must be enrolled in the course OR be admin)
+🔒 **Auth Required** (any logged-in user)
 
 **Description:** Get all resources for a specific course.
 
@@ -1079,16 +1098,21 @@ Base Path: `/api/v1/resources`
 **Response (200):** Returns array of resource objects.
 
 **Errors:**
-- `403` — Active enrollment required
 - `404` — Course not found
 
 ---
 
 #### `GET /api/v1/resources/:id/download`
 
-🔒 **Auth Required** (must be enrolled OR be admin)
+🔒 **Auth Required** (any logged-in user)
 
-**Description:** Get a **signed S3 download URL** for a resource file. The signed URL is **time-limited**.
+**Description:** Downloads the file itself. The bytes are stored in a SQLite
+blob store on the server and streamed straight back.
+
+> ⚠️ **This endpoint does NOT return JSON.** It used to return a signed S3 URL in
+> a JSON body; it no longer does, and there is no URL to follow. The response
+> body **is** the file. `axios.get(...).data.downloadUrl` is `undefined` here —
+> use one of the two patterns below.
 
 **URL Params:**
 
@@ -1096,19 +1120,68 @@ Base Path: `/api/v1/resources`
 | ----- | ------ | ------------------- |
 | `id`  | String | Resource ObjectId   |
 
-**Success Response (200):**
-```json
-{
-  "statusCode": 200,
-  "data": {
-    "downloadUrl": "https://s3.amazonaws.com/bucket/...?X-Amz-Signature=..."
-  },
-  "message": "Signed URL generated successfully",
-  "success": true
-}
+**Success Response (200):** the raw file bytes, with:
+
+| Header                | Value                                                                |
+| --------------------- | -------------------------------------------------------------------- |
+| `Content-Type`        | The file's stored MIME type, usually `application/pdf`               |
+| `Content-Length`      | Exact byte length                                                    |
+| `Content-Disposition` | `attachment; filename="<ascii title>.pdf"; filename*=UTF-8''<title>` |
+
+The `filename*` parameter carries the real title, so Hindi and other non-Latin
+titles download with their proper names. `Content-Disposition` is included in
+the CORS `Access-Control-Expose-Headers` list, so browser JS can read it.
+
+**Errors:**
+- `400` — Invalid file ID (not a 24-character ObjectId)
+- `401` — Not logged in
+- `403` — Resource deleted or deactivated
+- `404` — Resource not found, or its bytes are missing from the store
+
+##### Downloading from the frontend
+
+**Option A — plain link (simplest).** `verifyJWT` accepts the `accessToken`
+cookie that login sets, so on the same site an ordinary link just works. The
+browser handles the save dialog and the filename:
+
+```html
+<a href="https://api.example.com/api/v1/resources/665a.../download">Download PDF</a>
 ```
 
-> ⚠️ The `downloadUrl` is a **pre-signed S3 URL**. Open it in a browser or use it in `<a href>` / `window.open()` for download. It expires after a limited time.
+Cross-origin, the link must carry the cookie — the cookie needs `SameSite=None;
+Secure` and the API's `CORS_ORIGIN` must name the site exactly.
+
+**Option B — fetch + blob (needed when the token is in memory/localStorage,
+not a cookie).** Note `responseType: 'blob'`; without it axios parses the PDF
+as text and the saved file is corrupt:
+
+```javascript
+const res = await axios.get(`/resources/${id}/download`, {
+  responseType: 'blob',
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+// Prefer the server's filename; fall back to the title you already have.
+const disposition = res.headers['content-disposition'] || '';
+const utf8 = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+const ascii = /filename="([^"]+)"/.exec(disposition);
+const filename = utf8
+  ? decodeURIComponent(utf8[1])
+  : ascii
+    ? ascii[1]
+    : `${resource.title}.pdf`;
+
+const url = URL.createObjectURL(res.data);
+const a = document.createElement('a');
+a.href = url;
+a.download = filename;
+a.click();
+URL.revokeObjectURL(url); // else the blob is held until the tab closes
+```
+
+> A `404` on a resource that appears in the listing means the record exists but
+> its bytes do not. Run `npm run check:pdfs` on the server to see every such
+> resource at once.
 
 ---
 
@@ -1116,21 +1189,32 @@ Base Path: `/api/v1/resources`
 
 🔴 **Admin Only**
 
-**Description:** Upload a new resource file to a course.
+**Description:** Upload a new resource file. The bytes go into the server's
+SQLite blob store; nothing is written to the application directory, so a deploy
+cannot delete them.
 
 **Content-Type:** `multipart/form-data`
 
-| Field           | Type   | Location  | Required | Validation                                                      |
-| --------------- | ------ | --------- | -------- | --------------------------------------------------------------- |
-| `file`          | File   | Form Data | ✅       | Max 50 MB                                                       |
-| `title`         | String | Form Data | ✅       | Min 3 chars                                                     |
-| `description`   | String | Form Data | ❌       | Optional                                                        |
-| `course`        | String | Form Data | ✅       | Valid MongoDB ObjectId                                           |
-| `resource_type` | String | Form Data | ✅       | `"pdf"`, `"video"`, `"notes"`, `"assignment"`, or `"solution"` |
+| Field            | Type   | Location  | Required | Validation                                                      |
+| ---------------- | ------ | --------- | -------- | --------------------------------------------------------------- |
+| `file`           | File   | Form Data | ✅       | Max 50 MB, field name must be exactly `file`                    |
+| `title`          | String | Form Data | ✅       | Min 3 chars — also becomes the downloaded filename               |
+| `description`    | String | Form Data | ❌       | Optional                                                        |
+| `course`         | String | Form Data | ❌       | Valid MongoDB ObjectId. Omit for a standalone resource          |
+| `category`       | String | Form Data | ❌       | Valid MongoDB ObjectId                                           |
+| `resource_type`  | String | Form Data | ✅       | `"pdf"`, `"video"`, `"notes"`, `"assignment"`, or `"solution"` |
+| `access_type`    | String | Form Data | ❌       | `"free"` (default) or `"paid"`                                  |
+| `price`          | Number | Form Data | ❌       | ≥ 0                                                            |
+| `discount_price` | Number | Form Data | ❌       | ≥ 0                                                            |
 
 > ⚠️ This is the **only endpoint that uses `multipart/form-data`** instead of JSON. Use `FormData` in the frontend.
 
 **Success Response (201):** Returns created resource object.
+
+**Errors:**
+- `400` — Validation failed, no file sent, or the file was sent under a field name other than `file`
+- `404` — Course not found
+- `413` — File is over the 50 MB limit
 
 ---
 
@@ -1138,7 +1222,7 @@ Base Path: `/api/v1/resources`
 
 🔴 **Admin Only**
 
-**Description:** Delete a resource (removes from S3 and database permanently).
+**Description:** Delete a resource. Removes the database record and the stored bytes permanently.
 
 **Success Response (200):** Returns empty `data`.
 
@@ -2069,6 +2153,7 @@ All models include `createdAt` and `updatedAt` fields in **ISO 8601** format. Ex
 | `DELETE` | `/api/v1/courses/:id`                            | 🔴 Admin        | —                  |
 | `PATCH`  | `/api/v1/courses/:id/publish`                    | 🔴 Admin        | —                  |
 | `PATCH`  | `/api/v1/courses/:id/unpublish`                  | 🔴 Admin        | —                  |
+| `GET`    | `/api/v1/resources`                              | 🔒 Auth         | —                  |
 | `GET`    | `/api/v1/resources/course/:courseId`              | 🔒 Auth         | —                  |
 | `GET`    | `/api/v1/resources/:id/download`                 | 🔒 Auth         | —                  |
 | `POST`   | `/api/v1/resources`                              | 🔴 Admin        | multipart/form-data |

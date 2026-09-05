@@ -1,6 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
-import { BODY_LIMIT } from '../constants.js';
+import { BODY_LIMIT, MAX_UPLOAD_MB } from '../constants.js';
 
 // Error logs capture the request body, which on the auth routes means
 // plaintext passwords and reset tokens land in logs/. Mask them.
@@ -43,6 +43,23 @@ export const errorHandler = (err, req, res, next) => {
   if (err.type === 'entity.too.large' || statusCode === 413) {
     statusCode = 413;
     message = `This test is larger than the ${BODY_LIMIT} the server accepts in one request. Save it as two shorter tests, or add the remaining questions from the test's Edit page one at a time.`;
+  }
+
+  // multer rejects an oversized or unexpected upload by calling next() with a
+  // MulterError, which carries no statusCode — so an admin uploading a 60MB
+  // scan got a bare 500 "File too large" and no idea it was the file's size or
+  // that anything could be done about it.
+  if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      statusCode = 413;
+      message = `This file is larger than the ${MAX_UPLOAD_MB}MB limit. Compress the PDF (most scans shrink a long way) or split it into parts and upload them as separate resources.`;
+    } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      statusCode = 400;
+      message = `Unexpected file field "${err.field}". Send the PDF as the "file" field of the form.`;
+    } else {
+      statusCode = 400;
+      message = `Upload rejected: ${err.message}`;
+    }
   }
 
   const duration = req.startTime

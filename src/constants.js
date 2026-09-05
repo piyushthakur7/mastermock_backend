@@ -12,3 +12,10 @@ export const DB_NAME = 'mastermock';
 // predictably with question count and 2mb leaves room for roughly 800
 // bilingual questions — still far under MongoDB's 16mb document ceiling.
 export const BODY_LIMIT = '2mb';
+
+// Ceiling for a resource file upload. Scanned question papers are the big ones
+// — a 300-page scan runs 20-40MB — so this is generous on purpose. Shared with
+// the error handler so the rejection message can quote the real number instead
+// of drifting away from it.
+export const MAX_UPLOAD_MB = 50;
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;

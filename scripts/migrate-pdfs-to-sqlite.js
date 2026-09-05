@@ -27,6 +27,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 import connectdb from '../src/db/connection.js';
 import { Resource } from '../src/models/resource.model.js';
@@ -49,11 +50,9 @@ const candidateRoots = () => {
   return [
     path.join(here, 'uploads'),
     path.join(here, '..', 'uploads'),
-    path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
-      '..',
-      'uploads',
-    ),
+    // fileURLToPath, not URL.pathname: on Windows the latter yields "/C:/..."
+    // which resolves to a nonexistent path and silently drops this candidate.
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'uploads'),
   ];
 };
 

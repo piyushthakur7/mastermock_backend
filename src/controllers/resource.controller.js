@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { saveFile, getFile, deleteFile } from '../utils/fileStorage.js';
 import { logger } from '../utils/logger.js';
 import crypto from 'crypto';
+import path from 'path';
 
 // @desc    Upload a new resource
 // @route   POST /api/v1/resources
@@ -73,11 +74,12 @@ export const deleteResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'Resource not found');
   }
 
-  // Delete from the blob store
-  deleteFile(resource.file_url);
-
-  // Hard delete from DB as it's just a file reference
+  // Record first, bytes second. The other order loses the PDF and then leaves
+  // the record behind if the Mongo delete fails — a resource that still lists
+  // for students but 404s on download. This way a failure leaves an unreferenced
+  // blob, which wastes a little space and nothing else.
   await resource.deleteOne();
+  deleteFile(resource.file_url);
 
   return res
     .status(200)
@@ -205,14 +207,30 @@ export const downloadResource = asyncHandler(async (req, res) => {
     throw new ApiError(404, 'File not found');
   }
 
-  // A title containing a quote, newline or non-ASCII byte would otherwise break
-  // out of the quoted filename and corrupt the response headers.
-  const safeFilename = resource.title.replace(/[^\w\-. ]/g, '_');
+  // Name the download after the resource title, keeping the real extension —
+  // hardcoding .pdf mislabels the video and notes resource types, and doubles
+  // the suffix on a title that already ends in one.
+  const extension =
+    path.extname(file.original_name || '').toLowerCase() || '.pdf';
+  const title = resource.title.trim();
+  const stem = title.toLowerCase().endsWith(extension)
+    ? title.slice(0, -extension.length)
+    : title;
+  const downloadName = `${stem}${extension}`;
+
+  // Two filenames on purpose. A quote, newline or non-ASCII byte in the title
+  // would break out of the quoted form and corrupt the response headers, so
+  // that one stays strictly ASCII; filename* carries the title intact (Hindi
+  // titles reduce to a row of underscores otherwise) and is what every current
+  // browser actually reads. encodeURIComponent escapes CR and LF, so the
+  // header cannot be split there either.
+  const asciiName =
+    downloadName.replace(/[^\w\-. ]/g, '_').trim() || `download${extension}`;
 
   // Set headers for download
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${safeFilename}.pdf"`,
+    `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
   );
   res.setHeader('Content-Type', file.mime_type || 'application/pdf');
   res.setHeader('Content-Length', file.size);

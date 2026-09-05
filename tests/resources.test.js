@@ -2,6 +2,7 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { makeUser, makeAdmin, auth } from './helpers.js';
 import { Resource } from '../src/models/resource.model.js';
+import { fileExists } from '../src/utils/fileStorage.js';
 
 // A minimal but structurally valid PDF
 const pdfBytes = Buffer.from(
@@ -110,5 +111,84 @@ describe('PDF upload and download round trip', () => {
     );
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe('download filename', () => {
+  it('keeps a non-ASCII title intact via filename*', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+
+    const upload = await uploadPdf(adminToken, {
+      title: 'गणित अध्याय 1',
+    });
+    expect(upload.status).toBe(201);
+
+    const res = await request(app)
+      .get(`/api/v1/resources/${upload.body.data._id}/download`)
+      .set(auth(studentToken));
+
+    const disposition = res.headers['content-disposition'];
+    // The ASCII fallback is still there for old clients...
+    expect(disposition).toContain('attachment; filename="');
+    // ...but the real title survives in the RFC 5987 parameter.
+    expect(disposition).toContain(
+      `filename*=UTF-8''${encodeURIComponent('गणित अध्याय 1.pdf')}`,
+    );
+  });
+
+  it('does not double the extension when the title already ends in .pdf', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+
+    const upload = await uploadPdf(adminToken, { title: 'Answer Key.pdf' });
+
+    const res = await request(app)
+      .get(`/api/v1/resources/${upload.body.data._id}/download`)
+      .set(auth(studentToken));
+
+    expect(res.headers['content-disposition']).toContain(
+      'filename="Answer Key.pdf"',
+    );
+    expect(res.headers['content-disposition']).not.toContain('.pdf.pdf');
+  });
+});
+
+describe('upload rejections explain themselves', () => {
+  it('400s with a usable message when the file is sent under the wrong field', async () => {
+    const { token: adminToken } = await makeAdmin();
+
+    const res = await request(app)
+      .post('/api/v1/resources')
+      .set(auth(adminToken))
+      .field('title', 'Wrong Field')
+      .field('resource_type', 'pdf')
+      .attach('pdf', pdfBytes, 'sample.pdf');
+
+    // Not a 500: the admin is told which field name to use.
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('"file"');
+  });
+});
+
+describe('deleting a resource', () => {
+  it('removes the record and the stored bytes together', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+
+    const upload = await uploadPdf(adminToken);
+    const { _id: id, file_url: storageKey } = upload.body.data;
+    expect(fileExists(storageKey)).toBe(true);
+
+    const del = await request(app)
+      .delete(`/api/v1/resources/${id}`)
+      .set(auth(adminToken));
+    expect(del.status).toBe(200);
+
+    expect(fileExists(storageKey)).toBe(false);
+    const res = await request(app)
+      .get(`/api/v1/resources/${id}/download`)
+      .set(auth(studentToken));
+    expect(res.status).toBe(404);
   });
 });

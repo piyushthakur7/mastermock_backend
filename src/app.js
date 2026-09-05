@@ -40,6 +40,10 @@ app.use(
   cors({
     origin: corsOrigin,
     credentials: true,
+    // Content-Disposition is not a CORS-safelisted response header, so without
+    // this the frontend's fetch()+blob download cannot read the filename the
+    // server chose and every saved PDF ends up named after the resource id.
+    exposedHeaders: ['Content-Disposition'],
   }),
 );
 
