@@ -5,6 +5,7 @@ import {
   getAllResources,
   getCourseResources,
   downloadResource,
+  replaceResourceFile,
 } from '../controllers/resource.controller.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/role.middleware.js';
@@ -31,5 +32,6 @@ router
   .post(upload.single('file'), validate(createResourceSchema), uploadResource);
 
 router.route('/:id').delete(deleteResource);
+router.route('/:id/file').put(upload.single('file'), replaceResourceFile);
 
 export default router;

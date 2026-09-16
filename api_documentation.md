@@ -1104,6 +1104,10 @@ logged-in user — there is no enrollment or purchase check on resources.
 
 #### `GET /api/v1/resources/:id/download`
 
+Resource listings include `file_available`, indicating whether the stored file exists. Disable downloads when it is `false` and show a temporary-unavailability message.
+
+Admins can restore a missing file with `PUT /api/v1/resources/:id/file`, using multipart form data with a `file` field and the same upload limits as resource creation. The response contains the updated resource, including `file_available`. Its ID, title, category and other metadata are preserved.
+
 🔒 **Auth Required** (any logged-in user)
 
 **Description:** Downloads the file itself. The bytes are stored in a SQLite
@@ -1498,7 +1502,9 @@ Base Path: `/api/v1/attempts`
 
 🔒 **Auth Required**
 
-**Description:** Manually submit the test. Changes status from `IN_PROGRESS` to `COMPLETED`.
+**Description:** Submit and score the test atomically. Changes status from `IN_PROGRESS` to `COMPLETED`. Repeated submissions return the existing result without changing it.
+
+The optional JSON body is `{ "answers": [{ "question_id": "<ObjectId>", "selected_option_id": "<ObjectId or null>" }] }`. Send every question, including `null` for cleared or unanswered questions, so failed per-click saves do not lose selections. Answers are accepted while the attempt remains in progress, up to 30 seconds after its deadline; later submissions use previously saved answers. Invalid entries are ignored. A separate evaluate request is unnecessary.
 
 **URL Params:**
 
@@ -1506,7 +1512,7 @@ Base Path: `/api/v1/attempts`
 | ----------- | ------ | -------------------- |
 | `attemptId` | String | TestAttempt ObjectId |
 
-**Request Body:** None
+**Request Body:** Optional answer sheet described above; an empty body submits the saved answers.
 
 **Success Response (200):**
 ```json

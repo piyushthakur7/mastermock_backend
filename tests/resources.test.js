@@ -171,6 +171,104 @@ describe('upload rejections explain themselves', () => {
   });
 });
 
+describe('resources whose bytes are gone', () => {
+  const loseBytes = (id) =>
+    Resource.findByIdAndUpdate(id, {
+      file_url: 'resources/standalone/pdf_missing_gone.pdf',
+    });
+
+  it('are flagged unavailable in the listing', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+
+    const intact = await uploadPdf(adminToken, { title: 'Intact' });
+    const broken = await uploadPdf(adminToken, { title: 'Broken' });
+    await loseBytes(broken.body.data._id);
+
+    const res = await request(app)
+      .get('/api/v1/resources')
+      .set(auth(studentToken));
+
+    const byId = new Map(res.body.data.map((r) => [r._id, r]));
+    expect(byId.get(intact.body.data._id).file_available).toBe(true);
+    expect(byId.get(broken.body.data._id).file_available).toBe(false);
+  });
+
+  it('can have the file put back under the same record', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+
+    const upload = await uploadPdf(adminToken, { title: 'Syllogism Part-1' });
+    const id = upload.body.data._id;
+    await loseBytes(id);
+
+    const replacement = Buffer.concat([pdfBytes, Buffer.from('restored')]);
+    const put = await request(app)
+      .put(`/api/v1/resources/${id}/file`)
+      .set(auth(adminToken))
+      .attach('file', replacement, 'syllogism-1.pdf');
+
+    expect(put.status).toBe(200);
+    expect(put.body.data._id).toBe(id);
+    expect(put.body.data.title).toBe('Syllogism Part-1');
+    expect(put.body.data.file_available).toBe(true);
+    expect(await Resource.countDocuments()).toBe(1);
+
+    const res = await request(app)
+      .get(`/api/v1/resources/${id}/download`)
+      .set(auth(studentToken))
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    expect(Buffer.compare(res.body, replacement)).toBe(0);
+  });
+
+  it('drops the old bytes when a file is replaced', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const upload = await uploadPdf(adminToken);
+    const { _id: id, file_url: oldKey } = upload.body.data;
+
+    const put = await request(app)
+      .put(`/api/v1/resources/${id}/file`)
+      .set(auth(adminToken))
+      .attach('file', pdfBytes, 'new.pdf');
+
+    expect(fileExists(put.body.data.file_url)).toBe(true);
+    expect(fileExists(oldKey)).toBe(false);
+  });
+
+  it('only lets an admin replace a file', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+    const upload = await uploadPdf(adminToken);
+
+    const res = await request(app)
+      .put(`/api/v1/resources/${upload.body.data._id}/file`)
+      .set(auth(studentToken))
+      .attach('file', pdfBytes, 'evil.pdf');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('tells the student the download is temporarily unavailable', async () => {
+    const { token: adminToken } = await makeAdmin();
+    const { token: studentToken } = await makeUser();
+    const upload = await uploadPdf(adminToken);
+    await loseBytes(upload.body.data._id);
+
+    const res = await request(app)
+      .get(`/api/v1/resources/${upload.body.data._id}/download`)
+      .set(auth(studentToken));
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toMatch(/temporarily unavailable/);
+  });
+});
+
 describe('deleting a resource', () => {
   it('removes the record and the stored bytes together', async () => {
     const { token: adminToken } = await makeAdmin();

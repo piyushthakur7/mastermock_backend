@@ -5,6 +5,13 @@ import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { scoreAttempt } from '../services/scoring.service.js';
+import { completeAttempt } from '../services/attempt.service.js';
+
+// Answers carried on a submit are trusted up to the attempt's deadline plus
+// this allowance, which covers the request that was already in flight when
+// the exam screen's own timer reached zero. Any later and a student could keep
+// changing answers after time was up just by holding back the submit.
+const SUBMIT_GRACE_MS = 30 * 1000;
 
 // Lazily enforce the attempt deadline: the background sweeper completes
 // expired attempts once a minute, but a request can land in between (or the
@@ -16,16 +23,124 @@ const finalizeIfExpired = async (attempt) => {
     attempt.expires_at &&
     attempt.expires_at <= new Date()
   ) {
-    attempt.status = 'COMPLETED';
-    attempt.completed_at = attempt.expires_at;
     // Score at completion — the leaderboard reads COMPLETED attempts
     // directly, so an unscored completion would show up as 0.
     const hack = await Hack.findById(attempt.hack);
-    if (hack) scoreAttempt(attempt, hack);
-    await attempt.save();
+    await completeAttempt(attempt, hack, attempt.expires_at);
     return true;
   }
   return false;
+};
+
+// Per-attempt counts for the results screens. Only answers with a selected
+// option count as attempted: clearing a response leaves its row behind with a
+// null selection, and counting those rows showed a cleared question as
+// "wrong" beside a score that (correctly) never penalised it.
+const answerCounts = (answers = []) => {
+  const attempted = answers.filter((a) => a.selected_option_id);
+  const correctAnswers = attempted.filter((a) => a.is_correct).length;
+  return {
+    totalAttempted: attempted.length,
+    correctAnswers,
+    wrongAnswers: attempted.length - correctAnswers,
+  };
+};
+
+// Write one answer into an attempt that is still IN_PROGRESS, as conditional
+// updates rather than load-modify-save().
+//
+// With save(), an answer request that loaded the attempt just before the
+// student hit Submit would still save afterwards, pushing its answer into a
+// COMPLETED, already-scored attempt (or pushing a duplicate row for a
+// question the submit had written). Changing an existing answer also carried
+// Mongoose's version check, so it failed outright whenever another answer had
+// been added in between. Every write here is refused once the attempt is no
+// longer IN_PROGRESS, and a question can only ever have one row.
+const writeAnswer = async (attemptId, userId, question, fields) => {
+  const inProgress = { _id: attemptId, user: userId, status: 'IN_PROGRESS' };
+  const update = () =>
+    TestAttempt.findOneAndUpdate(
+      { ...inProgress, 'answers.question_id': question._id },
+      {
+        $inc: { __v: 1 },
+        $set: Object.fromEntries(
+          Object.entries(fields).map(([k, v]) => [`answers.$.${k}`, v]),
+        ),
+      },
+      { new: true },
+    );
+
+  const updated = await update();
+  if (updated) return updated;
+
+  const pushed = await TestAttempt.findOneAndUpdate(
+    { ...inProgress, 'answers.question_id': { $ne: question._id } },
+    {
+      $inc: { __v: 1 },
+      $push: {
+        answers: {
+          question_id: question._id,
+          question_text: question.text,
+          ...fields,
+        },
+      },
+    },
+    { new: true },
+  );
+  if (pushed) return pushed;
+
+  // A concurrent request added this question between the two writes above.
+  return update();
+};
+
+// Fold the answers the exam screen was showing at submit time into the
+// attempt before it is scored.
+//
+// Each click is saved by its own request, and a save that fails — a dropped
+// connection, a throttled request, or simply the last answer still in flight
+// when Submit lands — used to vanish without trace. The student saw their
+// choice on screen and was scored as if they had skipped it. Taking the full
+// answer sheet with the submit makes the score match what the student saw.
+//
+// Unknown questions or options (a stale screen after an admin edit) are
+// ignored rather than failing the whole submit.
+const mergeSubmittedAnswers = (attempt, submitted, hack) => {
+  const now = new Date();
+
+  for (const entry of submitted) {
+    if (!entry) continue;
+    const question = hack.questions.id(entry.question_id);
+    if (!question) continue;
+
+    const option = entry.selected_option_id
+      ? question.options.id(entry.selected_option_id)
+      : null;
+    if (entry.selected_option_id && !option) continue;
+
+    const existing = attempt.answers.find(
+      (a) => a.question_id.toString() === question._id.toString(),
+    );
+
+    if (existing) {
+      const unchanged =
+        String(existing.selected_option_id || '') === String(option?._id || '');
+      if (!unchanged) {
+        existing.selected_option_id = option ? option._id : null;
+        existing.selected_option_text = option ? option.text : null;
+        existing.answered_at = now;
+      }
+    } else if (option) {
+      // No row for an unanswered question: an empty row would read as
+      // "attempted" anywhere that counts rows.
+      attempt.answers.push({
+        question_id: question._id,
+        question_text: question.text,
+        selected_option_id: option._id,
+        selected_option_text: option.text,
+        answered_at: now,
+      });
+    }
+  }
 };
 
 // @desc    Start a test attempt
@@ -153,63 +268,67 @@ export const saveAnswer = asyncHandler(async (req, res) => {
     selected_option_text = option.text;
   }
 
-  // Check if answer exists in snapshot
-  const existingAnswerIndex = attempt.answers.findIndex(
-    (a) => a.question_id.toString() === question_id,
-  );
-
-  if (existingAnswerIndex !== -1) {
-    // Update Answer
-    attempt.answers[existingAnswerIndex].selected_option_id =
-      selected_option_id;
-    attempt.answers[existingAnswerIndex].selected_option_text =
-      selected_option_text;
-    attempt.answers[existingAnswerIndex].is_marked_for_review =
-      is_marked_for_review;
-    attempt.answers[existingAnswerIndex].answered_at = new Date();
-  } else {
-    // Save New Answer
-    attempt.answers.push({
-      question_id,
-      question_text: question.text,
-      selected_option_id,
-      selected_option_text,
-      is_marked_for_review,
-      answered_at: new Date(),
-    });
-  }
-
-  await attempt.save();
+  const saved = await writeAnswer(attempt._id, req.user._id, question, {
+    selected_option_id: selected_option_id || null,
+    selected_option_text,
+    is_marked_for_review,
+    answered_at: new Date(),
+  });
+  // The attempt was submitted between the lookup above and this write.
+  if (!saved) throw new ApiError(404, 'Active test attempt not found');
 
   return res
     .status(200)
-    .json(new ApiResponse(200, attempt.answers, 'Answer saved successfully'));
+    .json(new ApiResponse(200, saved.answers, 'Answer saved successfully'));
 });
 
 // @desc    Submit test manually
 // @route   POST /api/v1/attempts/:attemptId/submit
 // @access  Private/Student
+// @body    { answers?: [{ question_id, selected_option_id | null }] }
 export const submitTest = asyncHandler(async (req, res) => {
   const { attemptId } = req.params;
 
   const attempt = await TestAttempt.findOne({
     _id: attemptId,
     user: req.user._id,
-    status: 'IN_PROGRESS',
   });
-  if (!attempt) throw new ApiError(404, 'Active test attempt not found');
+  if (!attempt) throw new ApiError(404, 'Test attempt not found');
 
-  attempt.status = 'COMPLETED';
-  attempt.completed_at = new Date();
-  // Score at completion so the leaderboard never sees an unscored attempt;
-  // if the hack was deleted mid-attempt, still complete (score stays 0).
+  // Already finished: a double tap, a retry after a dropped response, or the
+  // auto-submit sweeper getting there first. The student's result exists, so
+  // hand it back rather than a 404 the exam screen reports as a failed submit.
+  if (attempt.status !== 'IN_PROGRESS') {
+    return res
+      .status(200)
+      .json(new ApiResponse(200, attempt, 'Test already submitted'));
+  }
+
   const hack = await Hack.findById(attempt.hack);
-  if (hack) scoreAttempt(attempt, hack);
-  await attempt.save();
+
+  const submitted = req.body?.answers;
+  const withinDeadline =
+    !attempt.expires_at ||
+    Date.now() <= attempt.expires_at.getTime() + SUBMIT_GRACE_MS;
+  // Score at completion so the leaderboard never sees an unscored attempt.
+  const completed = await completeAttempt(
+    attempt,
+    hack,
+    new Date(),
+    hack && Array.isArray(submitted) && withinDeadline
+      ? (current) => mergeSubmittedAnswers(current, submitted, hack)
+      : undefined,
+  );
+  if (!completed) {
+    const current = await TestAttempt.findById(attempt._id);
+    return res
+      .status(200)
+      .json(new ApiResponse(200, current, 'Test already submitted'));
+  }
 
   return res
     .status(200)
-    .json(new ApiResponse(200, attempt, 'Test submitted successfully'));
+    .json(new ApiResponse(200, completed, 'Test submitted successfully'));
 });
 
 // @desc    Get current attempt
@@ -229,13 +348,9 @@ export const getAttempt = asyncHandler(async (req, res) => {
   await finalizeIfExpired(attempt);
 
   // Same shaping as getMyAttempts — the results page reads `test`,
-  // `totalAttempted`, and `correctAnswers`, none of which exist on the raw
-  // document.
+  // `totalAttempted`, `correctAnswers` and `wrongAnswers`, none of which exist
+  // on the raw document.
   const obj = attempt.toObject();
-  const totalAttempted = obj.answers ? obj.answers.length : 0;
-  const correctAnswers = obj.answers
-    ? obj.answers.filter((a) => a.is_correct).length
-    : 0;
 
   // Release the answer key, but ONLY for a finished attempt.
   //
@@ -295,8 +410,7 @@ export const getAttempt = asyncHandler(async (req, res) => {
       {
         ...obj,
         test: obj.hack,
-        totalAttempted,
-        correctAnswers,
+        ...answerCounts(obj.answers),
         // Present only on a COMPLETED attempt.
         ...(solutions ? { questions: solutions } : {}),
       },
@@ -345,16 +459,10 @@ export const getMyAttempts = asyncHandler(async (req, res) => {
 
   const formattedAttempts = attempts.map((att) => {
     const obj = att.toObject();
-    const totalAttempted = obj.answers ? obj.answers.length : 0;
-    const correctAnswers = obj.answers
-      ? obj.answers.filter((a) => a.is_correct).length
-      : 0;
-
     return {
       ...obj,
       test: obj.hack,
-      totalAttempted,
-      correctAnswers,
+      ...answerCounts(obj.answers),
     };
   });
 
@@ -387,17 +495,11 @@ export const getAllAttempts = asyncHandler(async (req, res) => {
 
   const formattedAttempts = attempts.map((att) => {
     const obj = att.toObject();
-    const totalAttempted = obj.answers ? obj.answers.length : 0;
-    const correctAnswers = obj.answers
-      ? obj.answers.filter((a) => a.is_correct).length
-      : 0;
-
     return {
       ...obj,
       test: obj.hack,
       student: obj.user,
-      totalAttempted,
-      correctAnswers,
+      ...answerCounts(obj.answers),
     };
   });
 

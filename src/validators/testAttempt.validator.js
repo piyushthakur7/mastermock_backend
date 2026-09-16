@@ -16,6 +16,32 @@ export const startTestSchema = z
     path: ['hack_id'],
   });
 
+// The exam screen sends its whole answer sheet with the submit. A malformed
+// entry is dropped (.catch) rather than rejecting the request: a 400 here
+// would strand the student on the exam screen with their time running out,
+// which is far worse than ignoring one unreadable answer.
+export const submitTestSchema = z
+  .object({
+    answers: z
+      .array(
+        z
+          .object({
+            question_id: z.string().regex(/^[0-9a-fA-F]{24}$/),
+            selected_option_id: z
+              .string()
+              .regex(/^[0-9a-fA-F]{24}$/)
+              .nullable()
+              .optional(),
+          })
+          .nullable()
+          .catch(null),
+      )
+      .max(1000)
+      .optional()
+      .catch(undefined),
+  })
+  .default({});
+
 export const saveAnswerSchema = z.object({
   question_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid question ID'),
   selected_option_id: z

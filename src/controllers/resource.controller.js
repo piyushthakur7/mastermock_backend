@@ -3,10 +3,30 @@ import { Course } from '../models/course.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { saveFile, getFile, deleteFile } from '../utils/fileStorage.js';
+import {
+  saveFile,
+  getFile,
+  deleteFile,
+  fileExists,
+} from '../utils/fileStorage.js';
 import { logger } from '../utils/logger.js';
 import crypto from 'crypto';
 import path from 'path';
+
+const storageKeyFor = (folder, resourceType, originalName) =>
+  `resources/${folder || 'standalone'}/${resourceType}_${crypto
+    .randomBytes(8)
+    .toString('hex')}_${originalName}`;
+
+// Every listing says whether the bytes are actually there. A record can
+// outlive its file (that is how the PDF library emptied out without anything
+// noticing), and the only symptom was a student's download failing. With this
+// the student page can mark the PDF unavailable instead of offering a button
+// that errors, and the admin page can show exactly which ones need re-upload.
+const withAvailability = (resource) => ({
+  ...resource.toObject(),
+  file_available: Boolean(resource.file_url) && fileExists(resource.file_url),
+});
 
 // @desc    Upload a new resource
 // @route   POST /api/v1/resources
@@ -35,10 +55,11 @@ export const uploadResource = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'File is required');
   }
 
-  // Generate unique storage key
-  const uniqueSuffix = crypto.randomBytes(8).toString('hex');
-  const folder = course || 'standalone';
-  const storageKey = `resources/${folder}/${resource_type}_${uniqueSuffix}_${req.file.originalname}`;
+  const storageKey = storageKeyFor(
+    course,
+    resource_type,
+    req.file.originalname,
+  );
 
   // Persist the bytes in the SQLite blob store
   saveFile(req.file.buffer, storageKey, {
@@ -86,6 +107,55 @@ export const deleteResource = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, {}, 'Resource deleted successfully'));
 });
 
+// @desc    Replace the file behind an existing resource
+// @route   PUT /api/v1/resources/:id/file
+// @access  Private/Admin
+//
+// For a resource whose bytes were lost. Uploading it again as a new resource
+// leaves the broken record listed beside the new one; this puts the file back
+// under the record students already see, keeping its title, category and date.
+export const replaceResourceFile = asyncHandler(async (req, res) => {
+  const resource = await Resource.findOne({
+    _id: req.params.id,
+    isDeleted: false,
+  });
+  if (!resource) {
+    throw new ApiError(404, 'Resource not found');
+  }
+
+  if (!req.file) {
+    throw new ApiError(400, 'File is required');
+  }
+
+  const previousKey = resource.file_url;
+  const storageKey = storageKeyFor(
+    resource.course?.toString(),
+    resource.resource_type,
+    req.file.originalname,
+  );
+
+  // New bytes first, then point the record at them, then drop the old bytes.
+  // A failure part way leaves at worst an unreferenced blob, never a record
+  // pointing at nothing.
+  saveFile(req.file.buffer, storageKey, {
+    originalName: req.file.originalname,
+    mimeType: req.file.mimetype || 'application/pdf',
+  });
+  resource.file_url = storageKey;
+  await resource.save();
+  if (previousKey && previousKey !== storageKey) deleteFile(previousKey);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        withAvailability(resource),
+        'Resource file replaced successfully',
+      ),
+    );
+});
+
 // @desc    Get all resources (standalone PDFs) — login required, no enrollment check
 // @route   GET /api/v1/resources
 // @access  Private/Student
@@ -104,7 +174,13 @@ export const getAllResources = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, resources, 'Resources fetched successfully'));
+    .json(
+      new ApiResponse(
+        200,
+        resources.map(withAvailability),
+        'Resources fetched successfully',
+      ),
+    );
 });
 
 // @desc    Get resources for a course (backward compatible)
@@ -125,7 +201,13 @@ export const getCourseResources = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, resources, 'Resources fetched successfully'));
+    .json(
+      new ApiResponse(
+        200,
+        resources.map(withAvailability),
+        'Resources fetched successfully',
+      ),
+    );
 });
 
 // @desc    Download a resource (PDF) directly
@@ -204,7 +286,11 @@ export const downloadResource = asyncHandler(async (req, res) => {
         method: req.method,
       }),
     );
-    throw new ApiError(404, 'File not found');
+    // Shown to the student as-is, so say what it means for them.
+    throw new ApiError(
+      404,
+      'This PDF is temporarily unavailable while it is being re-uploaded. Please check back soon.',
+    );
   }
 
   // Name the download after the resource title, keeping the real extension —

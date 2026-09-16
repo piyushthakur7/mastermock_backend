@@ -1,6 +1,6 @@
 import { TestAttempt } from '../models/testAttempt.model.js';
 import { Hack } from '../models/hack.model.js';
-import { scoreAttempt } from '../services/scoring.service.js';
+import { completeAttempt } from '../services/attempt.service.js';
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -37,17 +37,18 @@ export const setupExamWorker = () => {
       // since many expired attempts usually belong to the same test.
       const hackCache = new Map();
       for (const attempt of expired) {
-        attempt.status = 'COMPLETED';
-        attempt.completed_at = attempt.expires_at;
-
         const hackId = attempt.hack.toString();
         if (!hackCache.has(hackId)) {
           hackCache.set(hackId, await Hack.findById(hackId));
         }
-        const hack = hackCache.get(hackId);
-        if (hack) scoreAttempt(attempt, hack);
-
-        await attempt.save();
+        // Conditional on still being IN_PROGRESS: if the student's own submit
+        // (carrying their full answer sheet) landed while this sweep was
+        // running, this stale copy must not overwrite that score.
+        await completeAttempt(
+          attempt,
+          hackCache.get(hackId),
+          attempt.expires_at,
+        );
       }
       console.log(`Auto-submitted ${expired.length} expired attempt(s)`);
     } catch (err) {

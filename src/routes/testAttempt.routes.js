@@ -14,6 +14,7 @@ import { validate } from '../middlewares/validate.middleware.js';
 import {
   startTestSchema,
   saveAnswerSchema,
+  submitTestSchema,
 } from '../validators/testAttempt.validator.js';
 
 const router = Router();
@@ -28,7 +29,7 @@ router.get('/', authorizeRoles('ADMIN'), getAllAttempts);
 router.get('/my', getMyAttempts);
 router.post('/start', validate(startTestSchema), startTest);
 router.put('/:attemptId/answer', validate(saveAnswerSchema), saveAnswer);
-router.post('/:attemptId/submit', submitTest);
+router.post('/:attemptId/submit', validate(submitTestSchema), submitTest);
 router.post('/:attemptId/evaluate', evaluateTest);
 router.get('/:attemptId', getAttempt);
 
