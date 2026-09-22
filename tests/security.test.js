@@ -1,6 +1,7 @@
 import request from 'supertest';
 import app from '../src/app.js';
 import { Payment } from '../src/models/payment.model.js';
+import { Purchase } from '../src/models/purchase.model.js';
 import { User } from '../src/models/user.model.js';
 import { makeUser, makeAdmin, makeHack, auth } from './helpers.js';
 
@@ -35,6 +36,46 @@ describe('payment ownership (IDOR)', () => {
     // and the record is untouched
     const after = await Payment.findById(payment._id);
     expect(after.status).toBe('SUCCESS');
+  });
+});
+
+describe('successful payment access reconciliation', () => {
+  it('repairs a missing purchase when verification is retried', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await makeHack(admin.user._id, {
+      access_type: 'paid',
+      price: 499,
+    });
+    const payment = await Payment.create({
+      user: student.user._id,
+      razorpay_order_id: 'order_paid_without_purchase',
+      amount: 499,
+      currency: 'INR',
+      item_id: hack._id,
+      item_type: 'Hack',
+      status: 'SUCCESS',
+      razorpay_payment_id: 'pay_captured',
+    });
+
+    const res = await request(app)
+      .post('/api/v1/payments/verify')
+      .set(auth(student.token))
+      .send({
+        razorpay_order_id: payment.razorpay_order_id,
+        razorpay_payment_id: payment.razorpay_payment_id,
+        razorpay_signature: 'already-verified',
+      });
+
+    expect(res.status).toBe(200);
+    expect(
+      await Purchase.exists({
+        user: student.user._id,
+        item_id: hack._id,
+        item_type: 'Hack',
+        status: 'ACTIVE',
+      }),
+    ).toBeTruthy();
   });
 });
 

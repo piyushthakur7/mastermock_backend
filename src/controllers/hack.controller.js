@@ -356,6 +356,7 @@ export const checkAccess = asyncHandler(async (req, res) => {
   let reason = '';
   let attemptExhausted = false;
   let hasPurchased = false;
+  let activeAttemptId = null;
 
   if (hack.access_type === 'free') {
     hasAccess = true;
@@ -370,12 +371,24 @@ export const checkAccess = asyncHandler(async (req, res) => {
 
     if (purchase) {
       hasPurchased = true;
-      const attemptCount = await mongoose.model('TestAttempt').countDocuments({
+      const activeAttempt = await mongoose.model('TestAttempt').findOne({
         user: req.user._id,
         hack: hack._id,
+        status: 'IN_PROGRESS',
       });
 
-      if (attemptCount >= 1) {
+      if (activeAttempt) {
+        // startTest returns this same attempt, so check-access must not label
+        // a resumable test as exhausted and leave the UI showing a lock.
+        hasAccess = true;
+        activeAttemptId = activeAttempt._id;
+        reason = 'Paid hack — active attempt can be resumed';
+      } else if (
+        await mongoose.model('TestAttempt').exists({
+          user: req.user._id,
+          hack: hack._id,
+        })
+      ) {
         hasAccess = false;
         attemptExhausted = true;
         reason = 'Paid test already attempted (One-time attempt only)';
@@ -412,6 +425,8 @@ export const checkAccess = asyncHandler(async (req, res) => {
         price: hack.price,
         reason,
         attempt_exhausted: attemptExhausted,
+        can_resume: Boolean(activeAttemptId),
+        active_attempt_id: activeAttemptId,
         has_purchased: hasPurchased,
         schedule_status: scheduleStatus,
         start_time: hack.start_time || null,

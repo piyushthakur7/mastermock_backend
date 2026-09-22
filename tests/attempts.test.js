@@ -2,6 +2,8 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { Hack } from '../src/models/hack.model.js';
 import { TestAttempt } from '../src/models/testAttempt.model.js';
+import { Payment } from '../src/models/payment.model.js';
+import { Purchase } from '../src/models/purchase.model.js';
 import {
   makeUser,
   makeAdmin,
@@ -240,6 +242,42 @@ describe('paid tests require a purchase', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.message).toMatch(/purchase/i);
+  });
+
+  it('reports an in-progress paid attempt as resumable', async () => {
+    const admin = await makeAdmin();
+    const student = await makeUser();
+    const hack = await makeHack(admin.user._id, {
+      access_type: 'paid',
+      price: 99,
+    });
+    const payment = await Payment.create({
+      user: student.user._id,
+      razorpay_order_id: 'order_resumable_attempt',
+      amount: 99,
+      item_id: hack._id,
+      item_type: 'Hack',
+      status: 'SUCCESS',
+    });
+    await Purchase.create({
+      user: student.user._id,
+      item_id: hack._id,
+      item_type: 'Hack',
+      payment: payment._id,
+      amount: 99,
+    });
+
+    const started = await startAttempt(student, hack);
+    const access = await request(app)
+      .get(`/api/v1/hacks/${hack._id}/check-access`)
+      .set(auth(student.token));
+
+    expect(started.status).toBe(201);
+    expect(access.status).toBe(200);
+    expect(access.body.data.has_access).toBe(true);
+    expect(access.body.data.can_resume).toBe(true);
+    expect(access.body.data.active_attempt_id).toBe(started.body.data._id);
+    expect(access.body.data.attempt_exhausted).toBe(false);
   });
 });
 

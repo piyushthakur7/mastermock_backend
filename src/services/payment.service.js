@@ -273,6 +273,15 @@ export const getPaymentStatus = async (userId, razorpayOrderId) => {
     }
   }
 
+  // A successful payment and its access grant are two separate database
+  // writes. If the process stopped between them (or Purchase.create failed
+  // temporarily), the payment remained SUCCESS forever while the user stayed
+  // locked out. Reconcile on every successful status read; grantAccess is
+  // idempotent, so this is safe for normal polling as well.
+  if (payment.status === 'SUCCESS') {
+    await grantAccess(payment, userId);
+  }
+
   // Return the current status from our DB
   return {
     status: payment.status,
@@ -310,6 +319,9 @@ export const verifyPayment = async (
   // If already verified (e.g. by webhook), return immediately
   if (payment.status === 'SUCCESS') {
     logger.info(`Payment already verified: order=${razorpayOrderId}`);
+    // Do not assume SUCCESS also means the separate Purchase write completed.
+    // Retrying here repairs interrupted/partially completed payment flows.
+    await grantAccess(payment, userId);
     return payment;
   }
 
